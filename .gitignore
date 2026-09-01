@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# uv
+uv-cache/
+
+# Frontend (bun/vite)
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Stray artifact (accidental SQLite db created at repo root, not project data)
+/None
