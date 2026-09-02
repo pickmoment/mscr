@@ -217,3 +217,14 @@ button,input,select{font-family:inherit;font-size:13px;line-height:1.35}
 .spinner{width:12px;height:12px;border-radius:50%;border:2px solid #33415399;border-top-color:#e94e4e;animation:spin .8s linear infinite;flex:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 [data-theme='light'] .spinner{border-color:#c3cedb;border-top-color:#e94e4e}
+.market-stats .card-grid{margin-bottom:2px}
+.breadth-bar{display:flex;height:6px;border-radius:99px;overflow:hidden;background:#1d2937;margin-bottom:10px}
+.breadth-up{background:#f05c64;height:100%}
+.breadth-down{background:#6e9ff5;height:100%}
+[data-theme='light'] .breadth-bar{background:#e2e8f0}
+.rank-table thead td{color:#7b899d;font-size:11px;padding-bottom:6px;border-bottom:1px solid #202936;position:sticky;top:0;background:#10151d}
+.rank-row{cursor:pointer}
+.rank-row:hover td{background:#151c26}
+[data-theme='light'] .rank-row:hover td{background:#eef2f7}
+[data-theme='light'] .rank-table thead td{background:#fff}
+.rank-scroll{max-height:420px;overflow-y:auto}

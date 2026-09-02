@@ -15,6 +15,7 @@ from ..broker.kis import KISError, broker_from_config, broker_status, clear_cred
 from ..db import db_session
 from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_NAMES, custom_definitions, formula_calls, ticker_snapshot, truncate_price_jump, validate_formula
 from ..indicators import bollinger_bands, macd, rsi, sma
+from .. import market_stats
 from ..portfolio import replay_trades, snapshot, validate_trade
 from ..config import DB_PATH, MSCR_HOME, SCHEMA_VERSION, request_delay, request_delay_source
 from ..credentials import load as load_settings
@@ -325,6 +326,19 @@ def bars(ticker: str, range: str = Query("1y"), indicators: str = Query("ma,rsi,
         values = sma(series[4], volume_ma_period)
         output["volume_ma"] = [{"time": idx, "value": value} for idx, value in values.items() if pd.notna(value)]
     return output
+
+@router.get("/market-stats/dates")
+def market_stats_dates():
+    return {"dates": market_stats.available_dates()}
+
+
+@router.get("/market-stats")
+def get_market_stats(date: str = Query(...)):
+    try:
+        return market_stats.compute(date)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
 
 @router.get("/portfolio")
 def portfolio():

@@ -23,6 +23,20 @@ export type PlanEvaluation = { plan_id: number; name: string; ticker: string; si
 export type BrokerOrder = { id: number | null; plan_id: number | null; plan_name: string | null; leg: TradePlanLeg | null; as_of: string | null; ticker: string; side: string; quantity: number; order_type: string; limit_price: number | null; status: string; env: string; broker_order_id: string | null; filled_quantity: number; filled_price: number | null; fee: number; tax: number; trade_id: number | null; message: string | null; requested_at: string; updated_at: string };
 export type AppSettings = { mscr_home: string; db_path: string; schema_version: number; credential_paths: { krx: string; kis: string }; request_delay_sec: number; request_delay_source: 'default' | 'env' | 'file'; krx: { mode: 'openapi' | 'idpw' | 'anonymous'; source: 'env' | 'file' | null; openapi_key_masked: string | null; krx_id_masked: string | null; stored: string[] }; kis: TradingStatus; data: { as_of: string | null; bars_rows: number; instrument_count: { stock: number; etf: number }; last_ingest_at: string | null } };
 export type IngestStatus = { running: boolean; source?: 'krx' | 'fdr'; days?: number; force?: boolean; started_at?: string; finished_at?: string | null; processed?: number; total?: number | null; current_day?: string | null; ok?: boolean | null; error?: string | null };
+export type MarketBreadth = { count: number; up: number; down: number; flat: number; limit_up: number; limit_down: number; new_high: number; new_low: number; halted: number };
+export type MarketRankRow = { ticker: string; name: string; market: string | null; close: number | null; change_pct: number | null; value: number | null; volume: number | null; vol_ratio: number | null; premium_pct: number | null };
+export type MarketCapBand = { category: string; count: number; avg_change_pct: number | null; value_sum: number | null };
+export type MarketQuantiles = { q1: number | null; median: number | null; q3: number | null };
+export type MarketStats = {
+  date: string; requested_date: string; prev_date: string | null;
+  counts: { total: number; stock: number; etf: number; kospi: number; kosdaq: number };
+  breadth: { all: MarketBreadth; kospi: MarketBreadth; kosdaq: MarketBreadth; etf: MarketBreadth };
+  volume: { value_sum: number | null; value_sum_prev: number | null; volume_sum: number | null; market_cap_sum: { KOSPI: number | null; KOSDAQ: number | null } };
+  rankings: { value_top: MarketRankRow[]; volume_surge_top: MarketRankRow[]; gainers_top: MarketRankRow[]; losers_top: MarketRankRow[] };
+  etf_rankings: { value_top: MarketRankRow[]; gainers_top: MarketRankRow[]; losers_top: MarketRankRow[]; premium_top: MarketRankRow[] };
+  sectors: MarketCapBand[];
+  valuation: { per: MarketQuantiles; pbr: MarketQuantiles; div_avg: number | null };
+};
 const detailMessage = (detail: unknown, status: number): string => {
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail) && detail.length) return detail.map((item: { loc?: (string | number)[]; msg?: string }) => `${(item.loc || []).filter(part => part !== 'body').join('.') || '요청'}: ${item.msg || '잘못된 값'}`).join(' / ');
@@ -96,4 +110,6 @@ export const api = {
   runPlans: (body: { dry_run: boolean; plan_ids?: number[] }) => request<BrokerOrder[]>('/api/trading/run', { method: 'POST', body: JSON.stringify(body) }),
   syncOrders: () => request<BrokerOrder[]>('/api/trading/sync', { method: 'POST' }),
   tradeOrders: (limit = 200) => request<BrokerOrder[]>(`/api/trading/orders?limit=${limit}`),
+  marketStatsDates: () => request<{ dates: string[] }>('/api/market-stats/dates'),
+  marketStats: (date: string) => request<MarketStats>(`/api/market-stats?date=${date}`),
 };
