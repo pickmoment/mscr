@@ -94,3 +94,9 @@ class KRXCredentialRequest(BaseModel):
 
 class PreferenceRequest(BaseModel):
     request_delay_sec: float = Field(ge=0, le=10)
+
+
+class IngestRunRequest(BaseModel):
+    days: int = Field(default=400, gt=0, le=3650)
+    force: bool = False
+    source: Literal["krx", "fdr"] = "krx"

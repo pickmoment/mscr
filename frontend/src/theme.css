@@ -43,11 +43,10 @@ button,input,select{font-family:inherit;font-size:13px;line-height:1.35}
 .indicator-editor,.indicator-list{padding:22px;overflow:auto}
 .indicator-editor h1{font-size:24px;line-height:1.2;margin:0 0 8px}
 .indicator-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:22px}
-.indicator-form label{display:grid;gap:7px;color:#8d9bb0;font-size:12px;font-weight:600}
-.indicator-form input,.indicator-form select,.indicator-form textarea{width:100%;border:1px solid #2a3544;border-radius:7px;background:#0d1219;color:#dbe4ef;padding:10px 12px;font:13px 'DM Mono',monospace}
+.indicator-form label:not(.check){display:grid;gap:7px;color:#8d9bb0;font-size:12px;font-weight:600}
+.indicator-form input:not([type=checkbox]),.indicator-form select,.indicator-form textarea{width:100%;border:1px solid #2a3544;border-radius:7px;background:#0d1219;color:#dbe4ef;padding:10px 12px;font:13px 'DM Mono',monospace}
 .indicator-form textarea{min-height:110px;resize:vertical;line-height:1.6}
-.indicator-form .formula-field,.indicator-form .toolbar,.formula-help{grid-column:1/-1}
-.indicator-form .check{display:flex}
+.indicator-form .formula-field,.indicator-form .toolbar,.formula-help,.indicator-form>label.check{grid-column:1/-1}
 .formula-help{margin-top:4px;padding:14px;border:1px solid #263342;background:#0d1219;border-radius:8px;color:#8d9bb0;font:12px/1.8 'DM Mono',monospace}
 .formula-help b{color:#dbe4ef;margin-right:8px}
 .indicator-item{padding:16px 0;border-bottom:1px solid #202936}
@@ -199,8 +198,9 @@ button,input,select{font-family:inherit;font-size:13px;line-height:1.35}
 .settings-card{padding:20px;display:grid;gap:10px;align-content:start}
 .settings-card h1{font-size:20px;line-height:1.2;margin:0}
 .settings-form{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px}
-.settings-form label{display:grid;gap:6px;color:#8d9bb0;font-size:12px;font-weight:600}
-.settings-form input,.settings-form select{width:100%;border:1px solid #2a3544;border-radius:6px;background:#0d1219;color:#dbe4ef;padding:9px 11px;font:12px 'DM Mono',monospace}
+.settings-form label:not(.check){display:grid;gap:6px;color:#8d9bb0;font-size:12px;font-weight:600}
+.settings-form label.check{grid-column:1/-1}
+.settings-form input:not([type=checkbox]),.settings-form select{width:100%;border:1px solid #2a3544;border-radius:6px;background:#0d1219;color:#dbe4ef;padding:9px 11px;font:12px 'DM Mono',monospace}
 .settings-form .toolbar{grid-column:1/-1}
 .settings-form button:disabled{opacity:.45;cursor:not-allowed}
 .settings-facts td:last-child{text-align:right;overflow-wrap:anywhere}

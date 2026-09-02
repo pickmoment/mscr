@@ -9,6 +9,7 @@ import pandas as pd
 import os
 from fastapi import APIRouter, HTTPException, Query, Response
 
+from .. import ingest_job
 from ..broker.kis import CREDENTIAL_PATH as kis_credential_path
 from ..broker.kis import KISError, broker_from_config, broker_status, clear_credentials, save_credentials, set_active_env
 from ..db import db_session
@@ -24,7 +25,7 @@ from ..providers.krx import KRXProvider, _stock, clear_krx_credentials, krx_stat
 from ..screener import FIELDS, run
 from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, sync_orders
 from ..autoplan import propose as propose_plan
-from .models import ActiveEnvRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, ScreenRequest, ScreenSaveRequest, TradePlanRequest, TradeRequest, TradeRunRequest
+from .models import ActiveEnvRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, ScreenRequest, ScreenSaveRequest, TradePlanRequest, TradeRequest, TradeRunRequest
 
 router = APIRouter(prefix="/api")
 
@@ -80,6 +81,25 @@ def delete_krx_credentials():
 def put_preferences(request: PreferenceRequest):
     save_settings("settings", load_settings("settings") | {"request_delay_sec": request.request_delay_sec})
     return _settings()
+
+
+@router.get("/ingest/krx-latest")
+def ingest_krx_latest():
+    from ..ingest import latest_trading_day
+    try:
+        return {"as_of": latest_trading_day()}
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/ingest/status")
+def get_ingest_status():
+    return ingest_job.status()
+
+
+@router.post("/ingest/run")
+def post_ingest_run(request: IngestRunRequest):
+    return ingest_job.start(request.days, request.force, request.source)
 
 
 @router.post("/screen")

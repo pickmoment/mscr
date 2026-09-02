@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, AppSettings } from '../lib/api';
+import { api, AppSettings, IngestStatus } from '../lib/api';
 
 const krxModeLabel: Record<AppSettings['krx']['mode'], string> = { openapi: 'Open API 키', idpw: '아이디/비밀번호', anonymous: '인증 없이 사용' };
 const sourceNote: Record<'env' | 'file', string> = { env: '환경변수 우선 적용 중', file: '이 툴에 저장됨' };
@@ -20,11 +20,26 @@ export default function SettingsPanel() {
   const [kisMsgs, setKisMsgs] = useState({ paper: emptyFeedback, real: emptyFeedback });
   const [prefMsg, setPrefMsg] = useState<Feedback>(emptyFeedback);
   const [busy, setBusy] = useState(false);
+  const [ingestForm, setIngestForm] = useState({ days: '400', force: false, source: 'krx' as 'krx' | 'fdr' });
+  const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
+  const [ingestMsg, setIngestMsg] = useState<Feedback>(emptyFeedback);
+  const [krxLatestMsg, setKrxLatestMsg] = useState<Feedback>(emptyFeedback);
   const apply = (next: AppSettings) => { setSettings(next); setDelay(String(next.request_delay_sec)); };
   const write = async (action: () => Promise<void>) => { setBusy(true); try { await action(); } finally { setBusy(false); } };
   const fields = (event: React.FormEvent) => { const data = new FormData(event.currentTarget as HTMLFormElement); return (name: string) => String(data.get(name) ?? '').trim(); };
   const setKisMsg = (env: 'paper' | 'real', msg: Feedback) => setKisMsgs(current => ({ ...current, [env]: msg }));
   useEffect(() => { api.settings().then(apply).catch(error => setLoadError(error instanceof Error ? error.message : '설정을 불러올 수 없습니다.')); }, []);
+  useEffect(() => { api.ingestStatus().then(setIngestStatus).catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!ingestStatus?.running) return;
+    const id = setInterval(() => { api.ingestStatus().then(setIngestStatus).catch(() => undefined); }, 1500);
+    return () => clearInterval(id);
+  }, [ingestStatus?.running]);
+  useEffect(() => {
+    if (ingestStatus && !ingestStatus.running && ingestStatus.finished_at && ingestStatus.ok) {
+      api.settings().then(apply).catch(() => undefined);
+    }
+  }, [ingestStatus?.finished_at]);
 
   const saveKrx = (event: React.FormEvent) => {
     event.preventDefault();
@@ -85,6 +100,21 @@ export default function SettingsPanel() {
     setPrefMsg(emptyFeedback);
     return write(async () => {
       try { apply(await api.savePreferences({ request_delay_sec: seconds })); setPrefMsg({ text: `수집 요청 간격을 ${seconds}초로 저장했습니다.`, ok: true }); } catch (error) { setPrefMsg({ text: error instanceof Error ? error.message : '수집 요청 간격 저장 실패', ok: false }); }
+    });
+  };
+
+  const checkKrxLatest = () => write(async () => {
+    try { const result = await api.krxLatest(); setKrxLatestMsg({ text: `KRX 최신 거래일: ${result.as_of}`, ok: true }); }
+    catch (error) { setKrxLatestMsg({ text: error instanceof Error ? error.message : 'KRX 최신 거래일 조회 실패', ok: false }); }
+  });
+  const startIngest = (event: React.FormEvent) => {
+    event.preventDefault();
+    const days = Number(ingestForm.days);
+    if (!Number.isFinite(days) || days <= 0 || days > 3650) { setIngestMsg({ text: '수집 기간은 1~3650일 사이여야 합니다.', ok: false }); return; }
+    setIngestMsg(emptyFeedback);
+    return write(async () => {
+      try { setIngestStatus(await api.runIngest({ days, force: ingestForm.force, source: ingestForm.source })); }
+      catch (error) { setIngestMsg({ text: error instanceof Error ? error.message : '수집 시작 실패', ok: false }); }
     });
   };
 
@@ -151,6 +181,33 @@ export default function SettingsPanel() {
         <label>요청 간격(초)<input name="request_delay_sec" type="number" step="0.1" min="0" max="10" value={delay} onChange={event => setDelay(event.target.value)} /></label>
         <div className="toolbar"><button className="primary" disabled={busy}>저장</button></div>
         {feedback(prefMsg)}
+      </form>
+    </section>
+
+    <section className="panel settings-card">
+      <div className="section-title">KRX INGEST</div>
+      <h1>데이터 수집</h1>
+      <div className="toolbar">
+        <button type="button" className="ghost" disabled={busy} onClick={checkKrxLatest}>KRX 최신 거래일 조회</button>
+        {feedback(krxLatestMsg)}
+      </div>
+      <form className="settings-form" onSubmit={startIngest}>
+        <label>수집 기간(일)<input type="number" min="1" max="3650" value={ingestForm.days} onChange={event => setIngestForm(current => ({ ...current, days: event.target.value }))} /></label>
+        <label>소스<select value={ingestForm.source} onChange={event => setIngestForm(current => ({ ...current, source: event.target.value as 'krx' | 'fdr' }))}>
+          <option value="krx">krx (기본)</option>
+          <option value="fdr">fdr (전종목 스냅샷 대체, 주식만)</option>
+        </select></label>
+        <label className="check"><input type="checkbox" checked={ingestForm.force} onChange={event => setIngestForm(current => ({ ...current, force: event.target.checked }))} />이미 수집된 날짜도 다시 수집(--force)</label>
+        <div className="toolbar">
+          <button className="primary" disabled={busy || !!ingestStatus?.running}>{ingestStatus?.running ? '수집 중…' : '수집 시작'}</button>
+          {ingestStatus?.running && <span className="screen-progress"><span className="spinner" />{ingestStatus.total ? `${ingestStatus.processed}/${ingestStatus.total} · ${ingestStatus.current_day || ''}` : '진행 중…'}</span>}
+        </div>
+        {feedback(ingestMsg)}
+        {!ingestStatus?.running && ingestStatus?.finished_at && (
+          ingestStatus.ok
+            ? <span className="settings-feedback ok">마지막 수집 완료 ({ingestStatus.finished_at})</span>
+            : <span className="settings-feedback error">마지막 수집 실패: {ingestStatus.error}</span>
+        )}
       </form>
     </section>
 

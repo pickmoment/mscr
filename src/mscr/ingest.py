@@ -90,7 +90,8 @@ def latest_trading_day(provider=None) -> str:
         raise RuntimeError(f"KRX 최근 거래일 조회에 실패했습니다: {exc}. API 키와 해당 서비스 이용 승인 상태를 확인하세요.") from exc
     return pd.Timestamp(as_of).strftime("%Y-%m-%d")
 
-def run_ingest(days: int = 400, force: bool = False, provider=None, source: str = "krx", path=None) -> None:
+def run_ingest(days: int = 400, force: bool = False, provider=None, source: str = "krx", path=None, on_progress=None) -> None:
+    """`on_progress`는 각 거래일 처리 후 (idx, total, day, stock_rows, etf_rows)로 호출된다. 웹 UI가 백그라운드 진행 상황을 폴링하는 데 쓴다."""
     if source == "fdr":
         _run_ingest_fdr_stocks(force=force, path=path)
         return
@@ -124,6 +125,8 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
                 except Exception as exc:
                     _record_run(db, day, kind, "failed", 0, int((time.monotonic() - started) * 1000), str(exc))
             print(f"[{idx}/{len(trading_days)}] {day} stock={stock_rows} etf={etf_rows} {time.monotonic() - started:.1f}s", file=sys.stderr)
+            if on_progress is not None:
+                on_progress(idx, len(trading_days), day, stock_rows, etf_rows)
         if not _already_done(db, as_of, "fundamental", force):
             started = time.monotonic()
             try:
