@@ -10,20 +10,21 @@ import numpy as np
 import pandas as pd
 
 from .db import db_session
-from .indicators import atr, crosses, ema, historical_volatility, returns, rsi, sma, volume_ratio
+from .indicators import atr, crosses, ema, historical_volatility, prior_avg_ratio, returns, rsi, slope, sma
 
 SERIES_NAMES = {"open", "high", "low", "close", "volume", "value"}
 SCALAR_NAMES = {"market_cap", "shares", "per", "pbr", "eps", "bps", "div", "change_pct", "bars_available", "halted", "price_jump_flag", "weighted_return"}
 SCREEN_NAMES = SERIES_NAMES | SCALAR_NAMES
-BUILTIN_FUNCTIONS = {"sma", "ema", "rsi", "returns", "volume_ratio", "historical_volatility", "atr", "rolling_max", "rolling_min", "crosses_above", "crosses_below", "abs"}
+BUILTIN_FUNCTIONS = {"sma", "ema", "rsi", "returns", "prior_avg_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min", "crosses_above", "crosses_below", "abs"}
 BUILTIN_CATALOG = [
     {"key": "sma", "label": "단순 이동평균", "signature": "sma(series, period)"},
     {"key": "ema", "label": "지수 이동평균", "signature": "ema(series, period)"},
     {"key": "rsi", "label": "RSI", "signature": "rsi(close, period)"},
     {"key": "returns", "label": "기간 수익률", "signature": "returns(close, period)"},
-    {"key": "volume_ratio", "label": "평균 거래량 대비 비율", "signature": "volume_ratio(volume, period)"},
+    {"key": "prior_avg_ratio", "label": "직전 평균 대비 비율", "signature": "prior_avg_ratio(series, period)"},
     {"key": "historical_volatility", "label": "실현 변동성", "signature": "historical_volatility(close, period)"},
     {"key": "atr", "label": "ATR", "signature": "atr(high, low, close, period)"},
+    {"key": "slope", "label": "정규화 회귀 기울기", "signature": "slope(series, period)"},
     {"key": "rolling_max", "label": "기간 최고값", "signature": "rolling_max(series, period)"},
     {"key": "crosses_above", "label": "상향 교차", "signature": "crosses_above(fast, slow)"},
     {"key": "crosses_below", "label": "하향 교차", "signature": "crosses_below(fast, slow)"},
@@ -144,9 +145,10 @@ def _evaluate(node: ast.AST, env: dict[str, Any], custom: dict[str, dict[str, An
             "ema": lambda series, period: ema(series, _period(period)),
             "rsi": lambda series, period: rsi(series, _period(period)),
             "returns": lambda series, period: returns(series, _period(period)),
-            "volume_ratio": lambda series, period: volume_ratio(series, _period(period)),
+            "prior_avg_ratio": lambda series, period: prior_avg_ratio(series, _period(period)),
             "historical_volatility": lambda series, period: historical_volatility(series, _period(period)),
             "atr": lambda high, low, close, period: atr(high, low, close, _period(period)),
+            "slope": lambda series, period: slope(series, _period(period)),
             "rolling_max": lambda series, period: series.rolling(_period(period), min_periods=_period(period)).max(),
             "rolling_min": lambda series, period: series.rolling(_period(period), min_periods=_period(period)).min(),
             "crosses_above": lambda fast, slow: crosses(fast, slow)[0],

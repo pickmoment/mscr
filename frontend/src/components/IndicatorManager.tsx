@@ -51,7 +51,7 @@ export default function IndicatorManager() {
         <label className="check"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />스크린 수식에서 사용</label>
         <div className="toolbar"><button className="primary">저장</button><button type="button" className="ghost" onClick={() => setForm(emptyForm)}>새 지표</button><span className="subtle">{message}</span></div>
       </form>
-      <div className="formula-help"><b>정의</b> close / sma(close, period) - 1<br /><b>호출</b> ma_gap(20) &gt; 0.1<br /><b>함수</b> sma, ema, rsi, returns, volume_ratio, historical_volatility, atr, rolling_max, rolling_min, crosses_above, crosses_below, abs</div>
+      <div className="formula-help"><b>정의</b> close / sma(close, period) - 1<br /><b>호출</b> ma_gap(20) &gt; 0.1<br /><b>함수</b> sma, ema, rsi, returns, prior_avg_ratio, historical_volatility, atr, slope, rolling_max, rolling_min, crosses_above, crosses_below, abs</div>
     </section>
     <section className="panel indicator-list">
       <div className="indicator-list-head"><div className="section-title">INDICATOR CATALOG <span className="badge">{items.length}</span></div><input placeholder="지표명 / 키 검색" value={search} onChange={event => setSearch(event.target.value)} /></div>

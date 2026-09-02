@@ -20,43 +20,50 @@ def sma(close: pd.Series, n: int) -> pd.Series:
 
 
 def ema(close: pd.Series, n: int) -> pd.Series:
+    # NaN을 만나면 씨앗을 버리고 다음 유효 구간에서 다시 시작한다(구간별 ewm).
     values = _valid(_series(close))
     out = pd.Series(np.nan, index=values.index, dtype="float64")
-    previous = None
-    for idx, value in values.items():
-        if pd.isna(value):
-            previous = None
-            continue
-        previous = float(value) if previous is None else (2 / (n + 1)) * float(value) + (1 - 2 / (n + 1)) * previous
-        out.loc[idx] = previous
-    return out
+    mask = values.notna().to_numpy()
+    if not mask.any():
+        return out
+    segment = (~mask).cumsum()
+    valid = pd.Series(values.to_numpy(dtype=float)[mask])
+    smoothed = valid.groupby(pd.Series(segment[mask])).transform(
+        lambda s: s.ewm(alpha=2 / (n + 1), adjust=False).mean())
+    result = out.to_numpy()
+    result[np.flatnonzero(mask)] = smoothed.to_numpy()
+    return pd.Series(result, index=values.index, dtype="float64")
 
 
 def rsi(close: pd.Series, n: int = 14) -> pd.Series:
     values = _valid(_series(close))
     out = pd.Series(np.nan, index=values.index, dtype="float64")
-    valid = values.dropna()
+    mask = values.notna().to_numpy()
+    valid = values.to_numpy(dtype=float)[mask]
     if len(valid) < n + 1:
         return out
-    gains = valid.diff().clip(lower=0)
-    losses = (-valid.diff()).clip(lower=0)
-    for pos in range(n, len(valid)):
-        if pos == n:
-            avg_gain = gains.iloc[1:n + 1].mean()
-            avg_loss = losses.iloc[1:n + 1].mean()
-        else:
-            avg_gain = (avg_gain * (n - 1) + gains.iloc[pos]) / n
-            avg_loss = (avg_loss * (n - 1) + losses.iloc[pos]) / n
-        if avg_loss == 0 and avg_gain > 0:
-            value = 100.0
-        elif avg_gain == 0 and avg_loss > 0:
-            value = 0.0
-        elif avg_gain == 0 and avg_loss == 0:
-            value = np.nan
-        else:
-            value = 100 - 100 / (1 + avg_gain / avg_loss)
-        out.loc[valid.index[pos]] = value
-    return out
+    diff = np.diff(valid)  # 위치 1..m-1의 변화
+    gains = np.where(diff > 0, diff, 0.0)
+    losses = np.where(diff < 0, -diff, 0.0)
+    # Wilder 평활: 첫 n개 변화의 단순 평균을 씨앗으로 두고 alpha=1/n 재귀 (atr와 동일한 기법)
+    # pd.Series는 numpy 버퍼를 공유할 수 있으므로 씨앗은 접두부를 지우기 전에 계산한다.
+    gain_seed, loss_seed = gains[:n].mean(), losses[:n].mean()
+    seeded_gain = pd.Series(gains.copy(), dtype="float64")
+    seeded_loss = pd.Series(losses.copy(), dtype="float64")
+    seeded_gain.iloc[: n - 1] = np.nan
+    seeded_loss.iloc[: n - 1] = np.nan
+    seeded_gain.iloc[n - 1] = gain_seed
+    seeded_loss.iloc[n - 1] = loss_seed
+    avg_gain = seeded_gain.ewm(alpha=1 / n, adjust=False).mean().to_numpy()
+    avg_loss = seeded_loss.ewm(alpha=1 / n, adjust=False).mean().to_numpy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        value = 100 - 100 / (1 + avg_gain / avg_loss)
+    value = np.where((avg_loss == 0) & (avg_gain > 0), 100.0, value)
+    value = np.where((avg_gain == 0) & (avg_loss > 0), 0.0, value)
+    value = np.where((avg_gain == 0) & (avg_loss == 0), np.nan, value)
+    result = out.to_numpy()
+    result[np.flatnonzero(mask)[n:]] = value[n - 1:]
+    return pd.Series(result, index=values.index, dtype="float64")
 
 
 def detect_price_jump(close: pd.Series, reported_pct: pd.Series | None = None) -> pd.Series:
@@ -115,10 +122,22 @@ def returns(close: pd.Series, n: int) -> pd.Series:
     return values / values.shift(n) - 1
 
 
-def volume_ratio(volume: pd.Series, n: int) -> pd.Series:
+def prior_avg_ratio(volume: pd.Series, n: int) -> pd.Series:
     values = _series(volume)
     denominator = values.shift(1).rolling(n, min_periods=n).mean()
     return values.where(denominator > 0) / denominator.where(denominator > 0)
+
+
+def slope(close: pd.Series, n: int) -> pd.Series:
+    values = _series(close)
+    x = np.arange(n, dtype=float) - (n - 1) / 2
+    denom = (x ** 2).sum()
+
+    def _slope(y: np.ndarray) -> float:
+        mean = y.mean()
+        return (x * (y - mean)).sum() / denom / mean if mean > 0 else np.nan
+
+    return values.rolling(n, min_periods=n).apply(_slope, raw=True)
 
 
 def historical_volatility(close: pd.Series, n: int) -> pd.Series:
@@ -150,13 +169,15 @@ def consecutive(close: pd.Series) -> tuple[pd.Series, pd.Series]:
 
 def crosses(fast: pd.Series, slow: pd.Series) -> tuple[pd.Series, pd.Series]:
     f, s = _series(fast), _series(slow)
-    golden = pd.Series(False, index=f.index)
-    dead = pd.Series(False, index=f.index)
-    for pos in range(1, len(f)):
-        if all(pd.notna(x) for x in (f.iloc[pos], s.iloc[pos], f.iloc[pos-1], s.iloc[pos-1])):
-            golden.iloc[pos] = f.iloc[pos] > s.iloc[pos] and f.iloc[pos-1] <= s.iloc[pos-1]
-            dead.iloc[pos] = f.iloc[pos] < s.iloc[pos] and f.iloc[pos-1] >= s.iloc[pos-1]
-    return golden, dead
+    fa, sa = f.to_numpy(dtype=float), s.to_numpy(dtype=float)
+    fp, sp = np.roll(fa, 1), np.roll(sa, 1)
+    ok = np.zeros(len(fa), dtype=bool)
+    if len(fa) > 1:
+        ok[1:] = np.isfinite(fa[1:]) & np.isfinite(sa[1:]) & np.isfinite(fp[1:]) & np.isfinite(sp[1:])
+    with np.errstate(invalid="ignore"):
+        golden = ok & (fa > sa) & (fp <= sp)
+        dead = ok & (fa < sa) & (fp >= sp)
+    return pd.Series(golden, index=f.index), pd.Series(dead, index=f.index)
 
 
 def _valid_ohlc(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -177,7 +198,7 @@ def compute_indicators(open_: pd.Series, high: pd.Series, low: pd.Series, close:
     result: dict[str, pd.Series | float | int] = {
         "ma5": m5, "ma20": m20, "ma60": m60, "ma120": m120, "ma200": m200,
         "vma5": vm5, "vma20": vm20, "vma60": vm60,
-        "vol_ratio5": volume_ratio(v, 5), "vol_ratio20": volume_ratio(v, 20),
+        "vol_ratio5": prior_avg_ratio(v, 5), "vol_ratio20": prior_avg_ratio(v, 20),
         **r,
         "dist_ma20": c / m20 - 1, "dist_ma60": c / m60 - 1,
         "hi250": h.rolling(250, min_periods=250).max(), "lo250": l.rolling(250, min_periods=250).min(),

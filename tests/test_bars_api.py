@@ -22,6 +22,9 @@ def _seed_adjusted(db, ticker: str, dates: list[str], close: float) -> None:
     rows = [(ticker, date, "adjusted", close, close, close, close, 1000, 100000.0, None, 0) for date in dates]
     db.executemany("INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
 
+def _seed_coverage(db, ticker: str, source: str, earliest_attempted: str) -> None:
+    db.execute("INSERT INTO bars_coverage(ticker,source,earliest_attempted) VALUES(?,?,?)", (ticker, source, earliest_attempted))
+
 
 @pytest.fixture()
 def store(monkeypatch, tmp_path):
@@ -66,6 +69,7 @@ def test_fresh_adjusted_cache_skips_live_refetch(store, monkeypatch):
     with db_session(store) as db:
         _seed_krx_snapshot(db, "000001", ["2026-08-27", "2026-08-28"])
         _seed_adjusted(db, "000001", ["2026-08-27", "2026-08-28"], close=111.0)
+        _seed_coverage(db, "000001", "adjusted", "2020-01-01")
 
     def _boom():
         raise AssertionError("should not fetch live data when the cache is already current")
@@ -75,6 +79,31 @@ def test_fresh_adjusted_cache_skips_live_refetch(store, monkeypatch):
 
     assert result["adjusted"] is True
     assert result["bars"][-1]["close"] == 111.0
+
+
+def test_widening_range_after_narrow_cache_refetches_full_history(store, monkeypatch):
+    """3m 같은 좁은 range로 먼저 캐시된 뒤 3y로 넓혀도, tail이 최신이라는 이유로 head(과거 구간) 보강을
+    건너뛰면 안 된다. 실제 버그: adjusted 캐시가 이전 range의 시작일부터만 있어도 stale 검사만 통과하면
+    재조회를 하지 않아 넓힌 구간의 과거 데이터가 빠진다."""
+    with db_session(store) as db:
+        _seed_krx_snapshot(db, "000001", ["2026-08-27", "2026-08-28"])
+        _seed_adjusted(db, "000001", ["2026-08-01", "2026-08-27", "2026-08-28"], close=111.0)
+        _seed_coverage(db, "000001", "adjusted", "2026-08-01")  # 이전에 3m 범위로만 조회했던 상태를 흉내낸다.
+
+    fuller = pd.DataFrame({
+        "date": ["2024-01-02", "2026-08-27", "2026-08-28"],
+        "open": [50.0, 111.0, 111.0], "high": [50.0, 111.0, 111.0], "low": [50.0, 111.0, 111.0], "close": [50.0, 111.0, 111.0],
+        "volume": [500] * 3, "value": [25000.0] * 3, "nav": [None] * 3,
+    })
+    fake = _FakeProvider(fuller)
+    monkeypatch.setattr(routes, "KRXProvider", lambda: fake)
+
+    result = _call("000001", range="3y")
+
+    assert fake.calls, "3y로 넓히면 3m 캐시 시작일보다 이전 구간을 다시 조회해야 한다"
+    assert fake.calls[0][1] < "2026-08-01"
+    assert any(bar["time"] == "2024-01-02" for bar in result["bars"])
+
 
 
 def test_halted_bars_are_excluded_from_overlays_but_kept_in_raw_bars(store, monkeypatch):

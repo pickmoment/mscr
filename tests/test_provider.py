@@ -82,6 +82,25 @@ def test_minervini_preset_uses_supported_dynamic_fields():
     assert "sma(close, 20) > sma(close, 60)" in preset["formula"]
     assert "rolling_min(low, 250)" in preset["formula"]
 
+def test_presets_are_executable_by_the_formula_engine():
+    from mscr.dynamic import BUILTIN_FUNCTIONS, SCREEN_NAMES, validate_formula
+    from mscr.ingest import PRESETS
+
+    for preset in PRESETS.values():
+        validate_formula(preset["formula"], SCREEN_NAMES, BUILTIN_FUNCTIONS)
+        validate_formula(preset["sort"]["formula"], SCREEN_NAMES, BUILTIN_FUNCTIONS)
+
+def test_three_r_preset_selects_the_quietest_names_by_sort():
+    from mscr.ingest import PRESETS
+
+    preset = PRESETS["3R 목표 후보"]
+
+    # 절대 임계가 아니라 정렬+상한이 종목을 고른다. 임계로 바꾸면 고변동성 국면에서 후보가 0이 된다.
+    assert preset["sort"] == {"formula": "atr(high, low, close, 14) / close", "dir": "asc"}
+    assert preset["limit"] == 5
+    # 우선주를 빼면 측정 기대값이 +0.50R에서 +0.38R로 떨어진다.
+    assert preset["universe"]["exclude_preferred"] is False
+
 def _fdr_listing():
     return pd.DataFrame({
         "Code": ["005930", "000660"],

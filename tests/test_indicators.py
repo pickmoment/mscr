@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
+import pytest
 
-from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, rsi, sma, volume_ratio
+from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, prior_avg_ratio, rsi, slope, sma
 
 
 def test_sma_and_ema_conventions():
@@ -29,8 +30,16 @@ def test_bollinger_population_std_and_hv_sample_std():
     assert historical_volatility(close, 20).iloc[-1] != close.rolling(20).std(ddof=0).iloc[-1]
 
 
-def test_volume_ratio_excludes_current_volume():
-    assert volume_ratio(pd.Series([10, 10, 10, 10, 10, 50]), 5).iloc[-1] == 5.0
+def test_prior_avg_ratio_excludes_current_volume():
+    assert prior_avg_ratio(pd.Series([10, 10, 10, 10, 10, 50]), 5).iloc[-1] == 5.0
+
+
+def test_slope_normalizes_linear_series_by_window_mean():
+    assert slope(pd.Series([10.0, 11.0, 12.0, 13.0, 14.0]), 5).iloc[-1] == pytest.approx(1 / 12)
+
+
+def test_slope_flat_series_is_zero():
+    assert slope(pd.Series([5.0] * 5), 5).iloc[-1] == 0.0
 
 
 def test_cross_requires_prior_equal_boundary():
@@ -49,3 +58,49 @@ def test_price_jump_flag_rule():
     close = pd.Series([100000.0, 20000.0])
     reported = pd.Series([0.0, -1.5])
     assert detect_price_jump(close, reported).iloc[-1]
+
+
+def _rsi_reference(close: pd.Series, n: int = 14) -> pd.Series:
+    values = close.astype(float)
+    out = pd.Series(np.nan, index=values.index, dtype="float64")
+    valid = values.dropna()
+    if len(valid) < n + 1:
+        return out
+    gains = valid.diff().clip(lower=0)
+    losses = (-valid.diff()).clip(lower=0)
+    for pos in range(n, len(valid)):
+        if pos == n:
+            avg_gain = gains.iloc[1:n + 1].mean(); avg_loss = losses.iloc[1:n + 1].mean()
+        else:
+            avg_gain = (avg_gain * (n - 1) + gains.iloc[pos]) / n
+            avg_loss = (avg_loss * (n - 1) + losses.iloc[pos]) / n
+        if avg_loss == 0 and avg_gain > 0: value = 100.0
+        elif avg_gain == 0 and avg_loss > 0: value = 0.0
+        elif avg_gain == 0 and avg_loss == 0: value = np.nan
+        else: value = 100 - 100 / (1 + avg_gain / avg_loss)
+        out.loc[valid.index[pos]] = value
+    return out
+
+
+def _ema_reference(close: pd.Series, n: int) -> pd.Series:
+    values = close.astype(float)
+    out = pd.Series(np.nan, index=values.index, dtype="float64")
+    previous = None
+    for idx, value in values.items():
+        if pd.isna(value):
+            previous = None
+            continue
+        previous = float(value) if previous is None else (2 / (n + 1)) * float(value) + (1 - 2 / (n + 1)) * previous
+        out.loc[idx] = previous
+    return out
+
+
+def test_vectorized_rsi_and_ema_match_loop_reference():
+    # 벡터화 구현은 원래 루프 구현과 값이 같아야 한다 (NaN 공백 포함).
+    rng = np.random.default_rng(7)
+    close = pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.02, 300))))
+    close.iloc[[5, 6, 120, 121, 122, 250]] = np.nan  # 중간 공백
+    np.testing.assert_allclose(rsi(close, 14).to_numpy(), _rsi_reference(close, 14).to_numpy(), equal_nan=True, rtol=1e-9)
+    np.testing.assert_allclose(ema(close, 20).to_numpy(), _ema_reference(close, 20).to_numpy(), equal_nan=True, rtol=1e-9)
+    flat = pd.Series([5.0] * 40)  # 무변화 구간의 경계 규칙(NaN) 유지
+    np.testing.assert_allclose(rsi(flat, 14).to_numpy(), _rsi_reference(flat, 14).to_numpy(), equal_nan=True)

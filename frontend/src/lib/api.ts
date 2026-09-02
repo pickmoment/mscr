@@ -28,17 +28,31 @@ const detailMessage = (detail: unknown, status: number): string => {
   return `요청 실패 (HTTP ${status})`;
 };
 const REQUEST_TIMEOUT_MS = 15000;
-const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
+// 전 유니버스 동적 계산은 조건에 따라 수십 초가 걸릴 수 있어 스크린 요청만 별도의 긴 상한을 쓴다.
+const SCREEN_TIMEOUT_MS = 300000;
+type RequestOptions = { timeoutMs?: number; signal?: AbortSignal };
+const request = async <T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs = options?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (options?.signal) {
+    if (options.signal.aborted) onExternalAbort();
+    else options.signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
   let response: Response;
   try {
     response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...init, signal: controller.signal });
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw new Error(`서버 응답이 ${REQUEST_TIMEOUT_MS / 1000}초 넘게 없습니다. mscr 서버가 실행 중인지 확인하세요.`);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      if (timedOut) throw new Error(`서버 응답이 ${timeoutMs / 1000}초 넘게 없습니다. mscr 서버가 실행 중인지 확인하세요.`);
+      throw new Error('요청을 취소했습니다.');
+    }
     throw new Error('서버에 연결할 수 없습니다. mscr 서버가 실행 중인지, 포트가 맞는지 확인하세요.');
   } finally {
     clearTimeout(timer);
+    options?.signal?.removeEventListener('abort', onExternalAbort);
   }
   if (!response.ok) throw new Error(detailMessage((await response.json().catch(() => ({}))).detail, response.status));
   return response.status === 204 ? undefined as T : response.json();
@@ -47,7 +61,7 @@ const barsPath = (ticker: string, range: string, indicators: string[], config: C
 
 export const api = {
   meta: () => request<Meta>('/api/meta'),
-  screen: (spec: ScreenSpec) => request<{ as_of: string | null; count: number; rows: ScreenRow[] }>('/api/screen', { method: 'POST', body: JSON.stringify(spec) }),
+  screen: (spec: ScreenSpec, signal?: AbortSignal) => request<{ as_of: string | null; count: number; rows: ScreenRow[] }>('/api/screen', { method: 'POST', body: JSON.stringify(spec) }, { timeoutMs: SCREEN_TIMEOUT_MS, signal }),
   screens: () => request<{ id: number; name: string; spec: ScreenSpec; updated_at: string }[]>('/api/screens'),
   saveScreen: (name: string, spec: ScreenSpec) => request<{ id: number }>('/api/screens', { method: 'POST', body: JSON.stringify({ name, spec }) }),
   updateScreen: (id: number, name: string, spec: ScreenSpec) => request<{ id: number; name: string; updated_at: string }>(`/api/screens/${id}`, { method: 'PUT', body: JSON.stringify({ name, spec }) }),

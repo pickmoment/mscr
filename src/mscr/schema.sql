@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS daily_bars (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_bars_date ON daily_bars(date, source);
 
+CREATE TABLE IF NOT EXISTS bars_coverage (
+  ticker TEXT NOT NULL,
+  source TEXT NOT NULL,
+  earliest_attempted TEXT NOT NULL,
+  PRIMARY KEY (ticker, source)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS snapshots_fundamental (
   ticker TEXT NOT NULL, date TEXT NOT NULL,
   bps REAL, per REAL, pbr REAL, eps REAL, div REAL, dps REAL,

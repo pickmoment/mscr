@@ -212,3 +212,8 @@ button,input,select{font-family:inherit;font-size:13px;line-height:1.35}
 [data-theme='light'] .settings-form label{color:#657386}
 [data-theme='light'] .settings-form input,[data-theme='light'] .settings-form select{background:#f8fafc;border-color:#cbd5e1;color:#243244}
 [data-theme='light'] .kis-env-block+.kis-env-block{border-color:#e2e8f0}
+.primary:disabled{opacity:.55;cursor:progress}
+.screen-progress{display:inline-flex;align-items:center;gap:7px}
+.spinner{width:12px;height:12px;border-radius:50%;border:2px solid #33415399;border-top-color:#e94e4e;animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+[data-theme='light'] .spinner{border-color:#c3cedb;border-top-color:#e94e4e}

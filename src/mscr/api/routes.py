@@ -141,7 +141,7 @@ def delete_screen(screen_id: int):
 def indicators():
     fields_by_key = {key: spec for key, spec in FIELDS.items()}
     inputs = [{"id": None, "key": key, "label": fields_by_key[key].label_ko, "unit": fields_by_key[key].unit, "formula": None, "parameters": [], "enabled": True, "builtin": True, "series": key in SERIES_NAMES, "kind": fields_by_key[key].kind, "created_at": None, "updated_at": None} for key in fields_by_key if key in SCREEN_NAMES]
-    functions = [{"id": None, "key": item["key"], "label": item["label"], "unit": "number", "formula": item["signature"], "parameters": [{"name": "period", "default": 20, "min": 1, "max": 10000, "integer": True}] if item["key"] in {"sma", "ema", "rsi", "returns", "volume_ratio", "historical_volatility", "atr", "rolling_max", "rolling_min"} else [], "enabled": True, "builtin": True, "series": False, "kind": "function", "created_at": None, "updated_at": None} for item in BUILTIN_CATALOG]
+    functions = [{"id": None, "key": item["key"], "label": item["label"], "unit": "number", "formula": item["signature"], "parameters": [{"name": "period", "default": 20, "min": 1, "max": 10000, "integer": True}] if item["key"] in {"sma", "ema", "rsi", "returns", "prior_avg_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min"} else [], "enabled": True, "builtin": True, "series": False, "kind": "function", "created_at": None, "updated_at": None} for item in BUILTIN_CATALOG]
     custom = [item | {"builtin": False, "series": False, "kind": "function"} for item in custom_definitions(enabled_only=False)]
     return inputs + functions + custom
 
@@ -260,13 +260,19 @@ def bars(ticker: str, range: str = Query("1y"), indicators: str = Query("ma,rsi,
         rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='adjusted' AND date>=? AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL ORDER BY date", (ticker, start)).fetchall()
         adjusted = bool(rows)
         stale = bool(rows) and rows[-1]["date"] < as_of
-        if not rows or stale:
+        # 캐시된 adjusted 데이터가 이 범위의 시작일까지 닿는지 별도로 확인한다. rows는 date>=start로만 걸러서
+        # tail(최신 봉)이 최신이어도 head(과거 봉)가 이전에 더 좁은 range로 캐시된 채 남아있을 수 있다.
+        floor = db.execute("SELECT earliest_attempted FROM bars_coverage WHERE ticker=? AND source='adjusted'", (ticker,)).fetchone()
+        incomplete = floor is None or floor[0] > start
+        if not rows or stale or incomplete:
             try:
                 history = KRXProvider().history(ticker, start, as_of, item["kind"], adjusted=True)
                 if not history.empty:
                     db.executemany("INSERT OR REPLACE INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", [(ticker, r.get("date"), "adjusted", r.get("open"), r.get("high"), r.get("low"), r.get("close"), r.get("volume"), r.get("value"), r.get("nav"), 0) for r in history.to_dict("records")])
                     rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='adjusted' AND date>=? AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL ORDER BY date", (ticker, start)).fetchall()
                     adjusted = True
+                # 결과가 비어도(더 이상 과거 데이터가 없다는 뜻) 다음 요청에서 같은 구간을 또 조회하지 않도록 기록한다.
+                db.execute("INSERT INTO bars_coverage(ticker,source,earliest_attempted) VALUES(?,'adjusted',?) ON CONFLICT(ticker,source) DO UPDATE SET earliest_attempted=MIN(earliest_attempted,excluded.earliest_attempted)", (ticker, start))
             except Exception:
                 pass
         if not rows:

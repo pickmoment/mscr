@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, IndicatorDefinition, ScreenRow, ScreenSpec } from '../lib/api';
 import FormulaInput from './FormulaInput';
 import { screenSuggestions } from '../lib/suggest';
 
 const defaults: ScreenSpec = {
   universe: { kinds: ['stock', 'etf'], markets: ['KOSPI', 'KOSDAQ'], exclude_preferred: true, exclude_spac: true, exclude_halted: true, min_bars: 20 },
-  formula: 'volume_ratio(volume, 20) >= 3',
-  sort: { formula: 'volume_ratio(volume, 20)', dir: 'desc' },
+  formula: 'prior_avg_ratio(volume, 20) >= 3',
+  sort: { formula: 'prior_avg_ratio(volume, 20)', dir: 'desc' },
   limit: 500,
   as_of_offset: 0,
 };
@@ -18,6 +18,9 @@ export default function ScreenerPanel({ onResults }: { onResults: (rows: ScreenR
   const [presetName, setPresetName] = useState('');
   const [presetStatus, setPresetStatus] = useState('');
   const [status, setStatus] = useState('');
+  const [running, setRunning] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
   const [catalog, setCatalog] = useState<IndicatorDefinition[]>([]);
   const suggestions = useMemo(() => screenSuggestions(catalog), [catalog]);
   const loadPresets = () => api.screens().then(setSaved);
@@ -30,16 +33,33 @@ export default function ScreenerPanel({ onResults }: { onResults: (rows: ScreenR
   }, []);
 
   const updateUniverse = (key: 'kinds' | 'markets', value: string) => setSpec(current => ({ ...current, universe: { ...current.universe, [key]: current.universe[key].includes(value) ? current.universe[key].filter(item => item !== value) : [...current.universe[key], value] } }));
+  useEffect(() => {
+    if (!running) return;
+    setElapsed(0);
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  useEffect(() => () => abortRef.current?.abort(), []);
   const runScreen = async () => {
-    setStatus('동적 계산 중…');
+    if (running) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRunning(true);
+    setStatus('');
+    const started = Date.now();
     try {
-      const response = await api.screen(spec);
+      const response = await api.screen(spec, controller.signal);
       onResults(response.rows);
-      setStatus(`${response.count.toLocaleString()}개 결과 · ${response.as_of || '미수집'}`);
+      setStatus(`${response.count.toLocaleString()}개 결과 · ${response.as_of || '미수집'} · ${((Date.now() - started) / 1000).toFixed(1)}초`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '검색 실패');
+    } finally {
+      abortRef.current = null;
+      setRunning(false);
     }
   };
+  const cancelScreen = () => abortRef.current?.abort();
   const selectedPreset = saved.find(entry => String(entry.id) === selectedId);
   const applyPreset = () => {
     if (!selectedPreset) return;
@@ -103,6 +123,12 @@ export default function ScreenerPanel({ onResults }: { onResults: (rows: ScreenR
     <div className="screen-formula-block"><label>SCREEN EXPRESSION<FormulaInput multiline value={spec.formula} onChange={formula => setSpec(current => ({ ...current, formula }))} suggestions={suggestions} ariaLabel="스크린 수식" /></label><p>지표명을 입력하면 자동완성됩니다. <code>and</code> · <code>or</code> · <code>not</code>과 비교식을 조합합니다.</p><code className="formula-example">close &gt; sma(close, 20) and rsi(close, 14) &lt;= 30</code></div>
     <div style={{ marginTop: 18 }} className="section-title">SORT EXPRESSION</div>
     <div className="toolbar"><div className="sort-formula"><FormulaInput value={spec.sort.formula} onChange={formula => setSpec(current => ({ ...current, sort: { ...current.sort, formula } }))} suggestions={suggestions} placeholder="예: returns(close, 120)" ariaLabel="정렬 수식" /></div><select className="control" value={spec.sort.dir} onChange={event => setSpec(current => ({ ...current, sort: { ...current.sort, dir: event.target.value as 'asc' | 'desc' } }))}><option value="desc">내림차순</option><option value="asc">오름차순</option></select></div>
-    <div className="toolbar" style={{ marginTop: 10 }}><button className="primary" onClick={runScreen}>스크린 실행</button><span className="subtle">{status}</span></div>
+    <div className="toolbar" style={{ marginTop: 10 }}>
+      <button className="primary" onClick={runScreen} disabled={running}>{running ? '조회 중…' : '스크린 실행'}</button>
+      {running && <button className="ghost" onClick={cancelScreen}>취소</button>}
+      {running
+        ? <span className="subtle screen-progress" role="status"><span className="spinner" aria-hidden="true" />전 종목 동적 계산 중… {elapsed}초 경과</span>
+        : <span className="subtle">{status}</span>}
+    </div>
   </aside>;
 }
