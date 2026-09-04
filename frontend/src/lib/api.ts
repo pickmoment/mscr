@@ -42,15 +42,19 @@ export type LiveTrendingRow = { code: string; name: string; market: string | nul
 export type LiveThemeRow = { theme_id: number | null; theme: string | null; big_theme: string | null; stock_count: number; returns: number | null; rank: number; rank_change: number; up_count: number; down_count: number; even_count: number; date: string | null };
 export type LiveNewsRow = { dt: string | null; source: string | null; title: string; summary: string | null; link: string };
 export type LiveIssueRow = { dt: string | null; title: string; link: string; source: string | null };
-export type LiveFeaturedRow = { code: string; name: string; close: number | null; returns: number | null; volume: number | null; volume_valued: number | null };
+export type LiveFeaturedRow = { code: string; name: string; close: number | null; returns: number | null; volume: number | null; volume_valued: number | null; net: number | null };
 export type LiveFeaturedSection = { label: string; rows: LiveFeaturedRow[]; error?: string };
 export type LiveThemeStock = { code: string; name: string; market: string | null };
+export type LiveIndustryStock = { code: string; name: string | null; close: number | null; returns: number | null };
+export type LiveIndustryRow = { industry: string; count: number; up: number; down: number; flat: number; avg_returns: number | null; marketcap_sum: number; stocks: LiveIndustryStock[] };
 export type MarketLiveOverview = {
   breadth: { kospi?: LiveMarketStat; kosdaq?: LiveMarketStat };
   trending: LiveTrendingRow[];
   theme_leaders: LiveThemeRow[];
   news: LiveNewsRow[];
   featured: Record<string, LiveFeaturedSection>;
+  net_flows: Record<string, LiveFeaturedSection>;
+  industries: LiveIndustryRow[];
   issues: LiveIssueRow[];
   errors: Record<string, string>;
 };

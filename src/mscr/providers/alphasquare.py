@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -24,6 +25,15 @@ FEATURED_FACTORS = (
     ("upper_limit_price", "상한가"),
     ("supervised", "관리종목"),
 )
+NET_FLOW_FACTORS = (
+    ("individual_volume_valued_net_buy_top", "개인 순매수 상위"),
+    ("individual_volume_valued_net_sell_top", "개인 순매도 상위"),
+    ("institutional_volume_valued_net_buy_top", "기관 순매수 상위"),
+    ("institutional_volume_valued_net_sell_top", "기관 순매도 상위"),
+    ("foreigner_volume_valued_net_buy_top", "외국인 순매수 상위"),
+    ("foreigner_volume_valued_net_sell_top", "외국인 순매도 상위"),
+)
+INDUSTRY_SAMPLE_SIZE = 300  # 업종현황 전용 엔드포인트가 없어 시가총액 상위 표본으로 근사한다
 
 
 def _http_get(session: requests.Session, path: str, params: dict[str, Any], delay: float) -> Any:
@@ -50,10 +60,50 @@ def _special_stocks(session: requests.Session, factor: str, wait: float, market:
     params: dict[str, Any] = {"limit": limit, "offset": 0, "exchange": "UNIFIED", "type_specs": "CS"}
     params["market"] = ["kospi", "kosdaq"] if market == "all" else market
     payload = _http_get(session, f"/data/v2/special-stocks/by/{factor}", params, wait)
-    return [
-        {"code": item.get("code"), "name": item.get("ko_name"), "close": item.get("close"), "returns": item.get("returns"), "volume": item.get("volume"), "volume_valued": item.get("volume_valued")}
-        for item in (payload.get("data") or [])
+    rows = []
+    for item in payload.get("data") or []:
+        # 주체별 순매매 factor는 개인/기관/외국인별로 net_vol_valued_<주체> 필드명이 다르다.
+        # 어떤 주체 factor인지는 호출한 쪽이 이미 알고 있으므로, 여기서는 존재하는 필드를 그대로 뽑는다.
+        net = next((value for key, value in item.items() if key.startswith("net_vol_valued_") and not key.endswith("_returns")), None)
+        rows.append({
+            "code": item.get("code"), "name": item.get("ko_name"), "close": item.get("close"), "returns": item.get("returns"),
+            "volume": item.get("volume"), "volume_valued": item.get("volume_valued"), "net": net,
+        })
+    return rows
+
+
+def _industry_overview(session: requests.Session, wait: float, sample_size: int = INDUSTRY_SAMPLE_SIZE) -> list[dict[str, Any]]:
+    """업종별 등락 현황을 시가총액 상위 `sample_size` 종목 표본으로 근사한다.
+
+    alpha-square에는 전종목 업종 집계 엔드포인트가 없어, 시가총액순 특징종목 조회로 받은
+    표본을 업종별로 묶어 평균 등락률·상승/하락 종목수를 계산한다. 전수조사가 아니므로
+    소형주 비중이 큰 업종은 실제와 오차가 있을 수 있다.
+    """
+    params: dict[str, Any] = {"limit": sample_size, "offset": 0, "exchange": "UNIFIED", "type_specs": "CS", "market": ["kospi", "kosdaq"]}
+    payload = _http_get(session, "/data/v2/special-stocks/by/marketcap", params, wait)
+    groups: dict[str, dict[str, Any]] = {}
+    for item in payload.get("data") or []:
+        industry = item.get("industry") or "기타"
+        group = groups.setdefault(industry, {"industry": industry, "count": 0, "up": 0, "down": 0, "flat": 0, "returns_sum": 0.0, "marketcap_sum": 0.0, "stocks": []})
+        group["count"] += 1
+        returns = item.get("returns")
+        if returns is not None:
+            group["returns_sum"] += returns
+            if returns > 0: group["up"] += 1
+            elif returns < 0: group["down"] += 1
+            else: group["flat"] += 1
+        marketcap = item.get("marketcap")
+        if marketcap is not None:
+            group["marketcap_sum"] += marketcap
+        # marketcap factor는 이미 시가총액 내림차순으로 오므로, 추가 정렬 없이 그대로 쌓으면
+        # 업종 안에서도 대형주가 먼저 나온다.
+        group["stocks"].append({"code": item.get("code"), "name": item.get("ko_name"), "close": item.get("close"), "returns": returns})
+    rows = [
+        {"industry": g["industry"], "count": g["count"], "up": g["up"], "down": g["down"], "flat": g["flat"], "avg_returns": g["returns_sum"] / g["count"] if g["count"] else None, "marketcap_sum": g["marketcap_sum"], "stocks": g["stocks"]}
+        for g in groups.values()
     ]
+    rows.sort(key=lambda row: row["avg_returns"] if row["avg_returns"] is not None else -math.inf, reverse=True)
+    return rows
 
 
 def theme_stocks(theme_id: int, delay: float | None = None) -> list[dict[str, Any]]:
@@ -74,7 +124,7 @@ def market_overview(delay: float | None = None) -> dict[str, Any]:
     """
     session = requests.Session()
     wait = request_delay() if delay is None else delay
-    result: dict[str, Any] = {"breadth": {}, "trending": [], "theme_leaders": [], "news": [], "issues": [], "featured": {}, "errors": {}}
+    result: dict[str, Any] = {"breadth": {}, "trending": [], "theme_leaders": [], "news": [], "issues": [], "featured": {}, "net_flows": {}, "industries": [], "errors": {}}
 
     def _section(name: str, fn: Any) -> None:
         try:
@@ -109,17 +159,26 @@ def market_overview(delay: float | None = None) -> dict[str, Any]:
         payload = _http_get(session, "/data/v2/issue/market", {"issue_type": "market", "limit": 20}, wait)
         return [{"dt": item.get("dt"), "title": item.get("title"), "link": item.get("link"), "source": item.get("source")} for item in (payload or [])]
 
-    def _featured() -> dict[str, Any]:
-        """factor마다 독립적으로 실패를 허용한다 — 하나가 막혀도 나머지 특징종목은 그대로 보여준다."""
+    def _factor_group(factors: tuple[tuple[str, str], ...]) -> dict[str, Any]:
+        """factor마다 독립적으로 실패를 허용한다 — 하나가 막혀도 같은 그룹의 나머지는 그대로 보여준다."""
         sections: dict[str, Any] = {}
-        for factor, label in FEATURED_FACTORS:
+        for factor, label in factors:
             try:
                 sections[factor] = {"label": label, "rows": _special_stocks(session, factor, wait)}
             except Exception as exc:
                 sections[factor] = {"label": label, "rows": [], "error": str(exc)}
         return sections
 
-    for name, fn in (("breadth", _breadth), ("trending", _trending), ("theme_leaders", _theme_leaders), ("news", _news), ("issues", _issues), ("featured", _featured)):
+    def _featured() -> dict[str, Any]:
+        return _factor_group(FEATURED_FACTORS)
+
+    def _net_flows() -> dict[str, Any]:
+        return _factor_group(NET_FLOW_FACTORS)
+
+    def _industries() -> list[dict[str, Any]]:
+        return _industry_overview(session, wait)
+
+    for name, fn in (("breadth", _breadth), ("trending", _trending), ("theme_leaders", _theme_leaders), ("news", _news), ("issues", _issues), ("featured", _featured), ("net_flows", _net_flows), ("industries", _industries)):
         _section(name, fn)
     return result
 

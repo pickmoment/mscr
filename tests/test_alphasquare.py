@@ -105,6 +105,12 @@ _LIVE_RESPONSES = {
     "/data/v3/issue/market-news": {"data": [{"dt": "2026-09-03", "source": "연합뉴스", "title": "코스피 상승", "summary": "요약", "link": "https://example.com/news"}]},
     "/data/v2/issue/market": [{"dt": "2026-09-03", "category": "market", "title": "이슈", "link": "https://example.com/issue", "source": "속보", "type": "market"}],
     "/data/v2/special-stocks/by/returns_top": {"data": [{"code": "005930", "ko_name": "삼성전자", "close": 70000.0, "returns": 5.5, "volume": 1000.0, "volume_valued": 700000.0}]},
+    "/data/v2/special-stocks/by/foreigner_volume_valued_net_buy_top": {"data": [{"code": "000660", "ko_name": "SK하이닉스", "close": 1600000.0, "returns": 3.0, "volume": 100.0, "volume_valued": 1000.0, "net_vol_valued_foreigner": 500000000, "net_vol_valued_foreigner_returns": -10.0}]},
+    "/data/v2/special-stocks/by/marketcap": {"data": [
+        {"code": "005930", "ko_name": "삼성전자", "industry": "반도체", "returns": 2.0, "marketcap": 400.0},
+        {"code": "000660", "ko_name": "SK하이닉스", "industry": "반도체", "returns": 4.0, "marketcap": 200.0},
+        {"code": "105560", "ko_name": "KB금융", "industry": "은행", "returns": -1.0, "marketcap": 50.0},
+    ]},
 }
 
 
@@ -129,6 +135,13 @@ def test_market_overview_aggregates_all_sections(monkeypatch):
     assert overview["featured"]["returns_top"]["label"] == "상승률 상위"
     assert overview["featured"]["returns_top"]["rows"][0]["name"] == "삼성전자"
     assert overview["featured"]["returns_bottom"]["rows"] == []
+    assert overview["net_flows"]["foreigner_volume_valued_net_buy_top"]["rows"][0]["net"] == 500000000
+    assert overview["net_flows"]["individual_volume_valued_net_buy_top"]["rows"] == []
+    assert overview["industries"][0]["industry"] == "반도체"
+    assert overview["industries"][0]["avg_returns"] == 3.0
+    assert overview["industries"][0]["up"] == 2
+    assert overview["industries"][1]["industry"] == "은행" and overview["industries"][1]["avg_returns"] == -1.0
+    assert [stock["code"] for stock in overview["industries"][0]["stocks"]] == ["005930", "000660"]
 
 
 def test_market_overview_keeps_other_sections_when_one_fails(monkeypatch):
@@ -160,6 +173,56 @@ def test_market_overview_keeps_other_featured_factors_when_one_fails(monkeypatch
     assert overview["featured"]["supervised"]["rows"] == []
     assert "error" in overview["featured"]["supervised"]
     assert overview["featured"]["returns_top"]["rows"][0]["code"] == "005930"
+
+
+def test_market_overview_keeps_other_net_flow_factors_when_one_fails(monkeypatch):
+    def fake_get(session, path, params, delay):
+        if path == "/data/v2/special-stocks/by/institutional_volume_valued_net_buy_top":
+            raise RuntimeError("boom")
+        return _fake_special_stocks(session, path, params, delay)
+
+    monkeypatch.setattr("mscr.providers.alphasquare._http_get", fake_get)
+
+    overview = market_overview(delay=0)
+
+    assert "net_flows" not in overview["errors"]
+    assert "error" in overview["net_flows"]["institutional_volume_valued_net_buy_top"]
+    assert overview["net_flows"]["foreigner_volume_valued_net_buy_top"]["rows"][0]["net"] == 500000000
+
+
+def test_special_stocks_extracts_the_matching_net_field_per_investor_type(monkeypatch):
+    from mscr.providers.alphasquare import _special_stocks
+
+    monkeypatch.setattr(
+        "mscr.providers.alphasquare._http_get",
+        lambda session, path, params, delay: {"data": [{"code": "000660", "ko_name": "SK하이닉스", "net_vol_valued_institutional": -123, "net_vol_valued_institutional_returns": 5.0}]},
+    )
+
+    rows = _special_stocks(None, "institutional_volume_valued_net_sell_top", 0)
+
+    assert rows == [{"code": "000660", "name": "SK하이닉스", "close": None, "returns": None, "volume": None, "volume_valued": None, "net": -123}]
+
+
+def test_industry_overview_groups_and_sorts_by_average_returns(monkeypatch):
+    from mscr.providers.alphasquare import _industry_overview
+
+    monkeypatch.setattr(
+        "mscr.providers.alphasquare._http_get",
+        lambda session, path, params, delay: {"data": [
+            {"code": "005930", "industry": "반도체", "returns": 2.0, "marketcap": 400.0},
+            {"code": "000660", "industry": "반도체", "returns": 4.0, "marketcap": 200.0},
+            {"code": "105560", "industry": "은행", "returns": -1.0, "marketcap": 50.0},
+            {"code": "999999", "industry": None, "returns": 0.0, "marketcap": 10.0},
+        ]},
+    )
+
+    rows = _industry_overview(None, 0)
+
+    assert [row["industry"] for row in rows] == ["반도체", "기타", "은행"]
+    assert rows[0] == {
+        "industry": "반도체", "count": 2, "up": 2, "down": 0, "flat": 0, "avg_returns": 3.0, "marketcap_sum": 600.0,
+        "stocks": [{"code": "005930", "name": None, "close": None, "returns": 2.0}, {"code": "000660", "name": None, "close": None, "returns": 4.0}],
+    }
 
 
 def test_theme_stocks_maps_response_fields(monkeypatch):
