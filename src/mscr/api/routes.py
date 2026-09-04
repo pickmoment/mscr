@@ -40,6 +40,16 @@ def meta():
     return {"as_of": as_of, "instrument_count": {"stock": counts.get("stock", 0), "etf": counts.get("etf", 0)}, "bars_rows": bars, "last_ingest_at": latest, "data_ready": bool(bars)}
 
 
+def _ingest_defaults() -> dict[str, Any]:
+    stored = load_settings("settings")
+    source = stored.get("ingest_source")
+    return {
+        "days": int(stored.get("ingest_days") or 400),
+        "force": bool(stored.get("ingest_force") or False),
+        "source": source if source in ("krx", "fdr", "alphasquare") else "krx",
+    }
+
+
 def _settings() -> dict[str, Any]:
     with db_session() as db:
         counts = {row["kind"]: row["n"] for row in db.execute("SELECT kind,COUNT(*) n FROM instruments GROUP BY kind")}
@@ -54,6 +64,7 @@ def _settings() -> dict[str, Any]:
         "krx": {key: krx[key] for key in ("mode", "source", "openapi_key_masked", "krx_id_masked", "stored")},
         "credential_paths": {"krx": str(path_for(krx_credential_name)), "kis": str(kis_credential_path)},
         "kis": broker_status(),
+        "ingest_defaults": _ingest_defaults(),
         "data": {"as_of": as_of, "bars_rows": bars, "instrument_count": {"stock": counts.get("stock", 0), "etf": counts.get("etf", 0)}, "last_ingest_at": last_ingest},
     }
 
@@ -100,6 +111,7 @@ def get_ingest_status():
 
 @router.post("/ingest/run")
 def post_ingest_run(request: IngestRunRequest):
+    save_settings("settings", load_settings("settings") | {"ingest_days": request.days, "ingest_force": request.force, "ingest_source": request.source})
     return ingest_job.start(request.days, request.force, request.source)
 
 
@@ -338,6 +350,21 @@ def get_market_stats(date: str = Query(...)):
         return market_stats.compute(date)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/market-live")
+def get_market_live():
+    from ..providers.alphasquare import market_overview
+    return market_overview()
+
+
+@router.get("/market-live/themes/{theme_id}/stocks")
+def get_market_live_theme_stocks(theme_id: int):
+    from ..providers.alphasquare import theme_stocks
+    try:
+        return {"stocks": theme_stocks(theme_id)}
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @router.get("/portfolio")

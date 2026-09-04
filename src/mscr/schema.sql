@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS bars_coverage (
   PRIMARY KEY (ticker, source)
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS alphasquare_ticker_map (
+  ticker TEXT PRIMARY KEY,
+  stock_id INTEGER NOT NULL,
+  resolved_at TEXT NOT NULL
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS snapshots_fundamental (
   ticker TEXT NOT NULL, date TEXT NOT NULL,
   bps REAL, per REAL, pbr REAL, eps REAL, div REAL, dps REAL,

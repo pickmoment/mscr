@@ -52,7 +52,11 @@ def doctor() -> None:
 
 
 @app.command()
-def ingest(days: int = typer.Option(400), force: bool = typer.Option(False), source: str = typer.Option("krx", help="krx(기본) 또는 fdr(전종목 스냅샷 대체 소스, 주식만 지원)")) -> None:
+def ingest(
+    days: int = typer.Option(400),
+    force: bool = typer.Option(False),
+    source: str = typer.Option("krx", help="krx(기본), fdr(전종목 스냅샷 대체, 주식만 지원) 또는 alphasquare(로컬 유니버스 종목별 개별 조회, 최후 폴백, --days 그대로 적용)"),
+) -> None:
     """Ingest KRX daily snapshots; indicators are calculated on demand."""
     from .ingest import run_ingest
     try:

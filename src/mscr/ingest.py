@@ -30,6 +30,10 @@ def _num(value):
     return None if pd.isna(value) else float(value)
 
 
+def _today():
+    return pd.Timestamp.now().date()
+
+
 def _upsert_universe(db, frame: pd.DataFrame, as_of: str, kind: str) -> None:
     if frame.empty:
         return
@@ -95,6 +99,9 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
     if source == "fdr":
         _run_ingest_fdr_stocks(force=force, path=path)
         return
+    if source == "alphasquare":
+        _run_ingest_alphasquare(days=days, force=force, path=path)
+        return
     if source != "krx":
         raise ValueError(f"지원하지 않는 소스입니다: {source}")
     provider = provider or KRXProvider()
@@ -103,7 +110,9 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
     except Exception as exc:
         raise RuntimeError(f"KRX 최근 거래일 조회에 실패했습니다: {exc}. API 키와 해당 서비스 이용 승인 상태를 확인하세요.") from exc
     end = pd.Timestamp(as_of).date()
-    trading_days = sorted(provider.trading_days(end - timedelta(days=days), end), reverse=True)
+    # trading_days는 양 끝을 포함하므로 days를 그대로 빼면 창이 days+1 캘린더일이 된다.
+    # days=1이 "가장 최근 거래일 하루"가 되도록 하나 적게 뺀다.
+    trading_days = sorted(provider.trading_days(end - timedelta(days=days - 1), end), reverse=True)
     with db_session(path) as db:
         _upsert_universe(db, provider.stock_universe(as_of), as_of, "stock")
         _upsert_universe(db, provider.etf_universe(as_of), as_of, "etf")
@@ -159,3 +168,45 @@ def _run_ingest_fdr_stocks(force: bool = False, path=None) -> None:
         count = _store_bars(db, matched, day)
         _record_run(db, day, "stock", "ok", count, int((time.monotonic() - started) * 1000))
     print(f"[fdr] {day} stock={count} ({time.monotonic() - started:.1f}s)", file=sys.stderr)
+
+
+def _run_ingest_alphasquare(days: int = 400, force: bool = False, path=None) -> None:
+    """alpha-square를 로컬 유니버스 티커별로 하나씩 호출해 최근 `days`일의 시세 공백을 채운다.
+
+    전종목을 한 번에 반환하는 벌크 엔드포인트는 없지만, 종목 하나당 날짜 구간은 한 번에
+    받아올 수 있어 다른 소스와 동일하게 --days로 수집 기간을 지정한다. KRX/pykrx/FDR이
+    모두 비었을 때만 쓰는 최후 폴백으로 의도했다.
+    """
+    from .providers.alphasquare import AlphaSquareProvider
+
+    with db_session(path) as db:
+        # 로컬에 이미 저장된 최신 거래일이 아니라 오늘 날짜를 기준으로 삼는다. KRX가 아직
+        # 오늘자를 게시하지 않아 로컬 최신일이 하루 이상 뒤처진 상태가 alpha-square를 쓰는
+        # 바로 그 상황이므로, 로컬 최신일을 기준으로 삼으면 정작 필요한 최신 날짜를 영영
+        # 요청하지 못한다.
+        end = _today()
+        # bdate_range는 양 끝을 포함하므로 days를 그대로 빼면 창이 days+1 캘린더일이 된다.
+        # days=1이 "오늘 하루"가 되도록 하나 적게 뺀다.
+        start = end - timedelta(days=days - 1)
+        all_days = [ts.strftime("%Y-%m-%d") for ts in pd.bdate_range(start, end)]
+        provider = AlphaSquareProvider(db)
+        for kind in ("stock", "etf"):
+            target_days = [day for day in all_days if not _already_done(db, day, kind, force)]
+            if not target_days:
+                print(f"[alphasquare] {kind} 이미 모두 수집됨 (--force로 재수집)", file=sys.stderr)
+                continue
+            tickers = [row[0] for row in db.execute("SELECT ticker FROM instruments WHERE kind=? AND delisted=0", (kind,)).fetchall()]
+            if not tickers:
+                print(f"[alphasquare] {kind} 유니버스가 비어 있어 건너뜁니다", file=sys.stderr)
+                continue
+            started = time.monotonic()
+            frame = provider.history(tickers, target_days[0], target_days[-1])
+            counts: dict[str, int] = {}
+            if not frame.empty:
+                for day, group in frame[frame["date"].isin(target_days)].groupby("date"):
+                    counts[day] = _store_bars(db, group.drop(columns="date"), day)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            for day in target_days:
+                count = counts.get(day, 0)
+                _record_run(db, day, kind, "ok" if count else "holiday", count, elapsed_ms)
+            print(f"[alphasquare] {kind} {target_days[0]}~{target_days[-1]} {sum(counts.values())}행 ({time.monotonic() - started:.1f}s)", file=sys.stderr)

@@ -20,11 +20,15 @@ export default function SettingsPanel() {
   const [kisMsgs, setKisMsgs] = useState({ paper: emptyFeedback, real: emptyFeedback });
   const [prefMsg, setPrefMsg] = useState<Feedback>(emptyFeedback);
   const [busy, setBusy] = useState(false);
-  const [ingestForm, setIngestForm] = useState({ days: '400', force: false, source: 'krx' as 'krx' | 'fdr' });
+  const [ingestForm, setIngestForm] = useState({ days: '400', force: false, source: 'krx' as 'krx' | 'fdr' | 'alphasquare' });
   const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
   const [ingestMsg, setIngestMsg] = useState<Feedback>(emptyFeedback);
   const [krxLatestMsg, setKrxLatestMsg] = useState<Feedback>(emptyFeedback);
-  const apply = (next: AppSettings) => { setSettings(next); setDelay(String(next.request_delay_sec)); };
+  const apply = (next: AppSettings) => {
+    setSettings(next);
+    setDelay(String(next.request_delay_sec));
+    setIngestForm({ days: String(next.ingest_defaults.days), force: next.ingest_defaults.force, source: next.ingest_defaults.source });
+  };
   const write = async (action: () => Promise<void>) => { setBusy(true); try { await action(); } finally { setBusy(false); } };
   const fields = (event: React.FormEvent) => { const data = new FormData(event.currentTarget as HTMLFormElement); return (name: string) => String(data.get(name) ?? '').trim(); };
   const setKisMsg = (env: 'paper' | 'real', msg: Feedback) => setKisMsgs(current => ({ ...current, [env]: msg }));
@@ -193,9 +197,10 @@ export default function SettingsPanel() {
       </div>
       <form className="settings-form" onSubmit={startIngest}>
         <label>수집 기간(일)<input type="number" min="1" max="3650" value={ingestForm.days} onChange={event => setIngestForm(current => ({ ...current, days: event.target.value }))} /></label>
-        <label>소스<select value={ingestForm.source} onChange={event => setIngestForm(current => ({ ...current, source: event.target.value as 'krx' | 'fdr' }))}>
+        <label>소스<select value={ingestForm.source} onChange={event => setIngestForm(current => ({ ...current, source: event.target.value as 'krx' | 'fdr' | 'alphasquare' }))}>
           <option value="krx">krx (기본)</option>
           <option value="fdr">fdr (전종목 스냅샷 대체, 주식만)</option>
+          <option value="alphasquare">alphasquare (종목별 개별 조회, 최후 폴백, 수집 기간 그대로 적용)</option>
         </select></label>
         <label className="check"><input type="checkbox" checked={ingestForm.force} onChange={event => setIngestForm(current => ({ ...current, force: event.target.checked }))} />이미 수집된 날짜도 다시 수집(--force)</label>
         <div className="toolbar">

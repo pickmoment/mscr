@@ -228,3 +228,14 @@ button,input,select{font-family:inherit;font-size:13px;line-height:1.35}
 [data-theme='light'] .rank-row:hover td{background:#eef2f7}
 [data-theme='light'] .rank-table thead td{background:#fff}
 .rank-scroll{max-height:420px;overflow-y:auto}
+.link-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px;max-height:420px;overflow-y:auto}
+.link-list li{padding-bottom:9px;border-bottom:1px solid #202936}
+.link-list a{color:#dbe4ef;text-decoration:none;font-size:13px}
+.link-list a:hover{color:#f4f7fb;text-decoration:underline}
+[data-theme='light'] .link-list li{border-color:#e2e8f0}
+[data-theme='light'] .link-list a{color:#1b2532}
+.theme-stock-chips{display:flex;flex-wrap:wrap;gap:6px}
+.theme-stock-chip{border:1px solid #2a3544;background:#151c26;color:#dbe4ef;border-radius:99px;padding:5px 10px;font-size:11px}
+.theme-stock-chip:hover{background:#1d2937}
+[data-theme='light'] .theme-stock-chip{background:#f1f5f9;border-color:#dce3eb;color:#1b2532}
+[data-theme='light'] .theme-stock-chip:hover{background:#e2e8f0}

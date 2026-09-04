@@ -99,4 +99,4 @@ class PreferenceRequest(BaseModel):
 class IngestRunRequest(BaseModel):
     days: int = Field(default=400, gt=0, le=3650)
     force: bool = False
-    source: Literal["krx", "fdr"] = "krx"
+    source: Literal["krx", "fdr", "alphasquare"] = "krx"
