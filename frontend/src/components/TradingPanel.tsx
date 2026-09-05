@@ -7,7 +7,7 @@ import { won } from '../lib/format';
 type Draft = { id: number | null; name: string; ticker: string; side: 'buy' | 'sell'; quantity: string; order_type: 'limit' | 'market'; limit_price: string; entry_price: string; stop_price: string; tp1_price: string; tp1_ratio: string; tp2_price: string; tp2_ratio: string; tp3_trailing_pct: string; enabled: boolean; note: string };
 const emptyForm: Draft = { id: null, name: '', ticker: '', side: 'buy', quantity: '', order_type: 'limit', limit_price: '', entry_price: '', stop_price: '', tp1_price: '', tp1_ratio: '', tp2_price: '', tp2_ratio: '', tp3_trailing_pct: '', enabled: true, note: '' };
 const statusLabel: Record<string, string> = { dry_run: '모의', submitted: '접수', partial: '부분체결', filled: '체결', rejected: '거부', failed: '실패', skipped: '건너뜀' };
-const statusTone: Record<string, string> = { filled: 'ok', rejected: 'bad', failed: 'bad', submitted: 'live', partial: 'live', dry_run: 'idle', skipped: 'idle' };
+const statusTone: Record<string, string | undefined> = { filled: 'ok', rejected: 'danger', failed: 'danger', submitted: 'live', partial: 'live', dry_run: undefined, skipped: undefined };
 const phaseLabel: Record<string, string> = { waiting_entry: '진입 대기', holding: '보유 중', tp1_done: '1차 완료', trailing: '트레일링', closed: '청산 완료' };
 const legLabel: Record<string, string> = { entry: '진입', stop: '손절 청산', tp1: '1차 익절', tp2: '2차 익절', trailing: '트레일링 청산' };
 const num = (value: number | null | undefined) => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
@@ -147,23 +147,24 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
   return <div className="trading-layout">
     <section className="panel trading-head">
       <div className="toolbar">
-        <div className="section-title" style={{ margin: 0 }}>BROKER</div>
+        <div className="section-title">브로커</div>
         {status?.enabled
-          ? <span className={`badge ${status.env === 'real' ? 'badge-real' : 'badge-paper'}`}>{status.env === 'real' ? '실전 계좌' : '모의 계좌'} · {status.account_masked || '계좌 미확인'}</span>
-          : <span className="badge badge-off">브로커 미설정</span>}
+          ? <span className="badge" data-tone={status.env === 'real' ? 'real' : 'live'}>{status.env === 'real' ? '실전 계좌' : '모의 계좌'} · {status.account_masked || '계좌 미확인'}</span>
+          : <span className="badge">브로커 미설정</span>}
         {!status?.enabled && <span className="subtle">{status?.reason || '상단 설정 탭에서 브로커 자격증명을 설정하세요.'}</span>}
         {status?.source === 'env' && <span className="subtle">환경변수 우선 적용 중</span>}
-        <div className="toolbar" style={{ marginLeft: 'auto' }}>
-          <button className="ghost" disabled={busy} onClick={() => run(true)}>모의 실행</button>
-          <button className="primary" disabled={busy || !status?.enabled} title={status?.enabled ? undefined : status?.reason || '브로커가 설정되지 않았습니다.'} onClick={() => run(false)}>실주문 실행</button>
-          <button className="ghost" disabled={busy || !status?.enabled} onClick={sync}>체결 동기화</button>
+        <div className="toolbar push">
+          <button className="btn btn--ghost" disabled={busy} onClick={() => run(true)}>모의 실행</button>
+          {/* 실제 돈이 나가는 버튼은 기본 액션 색을 쓰지 않는다. 모의 실행과 한눈에 구분돼야 한다. */}
+          <button className="btn btn--danger" disabled={busy || !status?.enabled} title={status?.enabled ? undefined : status?.reason || '브로커가 설정되지 않았습니다.'} onClick={() => run(false)}>실주문 실행</button>
+          <button className="btn btn--ghost" disabled={busy || !status?.enabled} onClick={sync}>체결 동기화</button>
         </div>
       </div>
-      <div className="trading-message subtle">{message || `대상 계획 ${armed.length}건 / 전체 ${plans.length}건`}</div>
+      {/* 작업 결과가 있으면 msg, 없으면 계획 건수만 조용히 보여준다. 둘 중 하나는 항상 렌더해 줄이 사라지지 않게 한다. */}
+      {message ? <span className="msg">{message}</span> : <div className="subtle">대상 계획 {armed.length}건 / 전체 {plans.length}건</div>}
     </section>
 
     <section className="panel autoplan-panel">
-      <div className="section-title">AUTO PLAN</div>
       <h1>계획 자동 생성</h1>
       <p className="subtle">종목·진입가·최대 투자 금액·최대 손실 금액만 넣으면 손절폭별 후보를 계산합니다. 후보를 고른 뒤 아래 계획 폼으로 불러와 이름을 붙이고 저장하세요. 자동 생성 자체로는 아무 주문도 나가지 않습니다.</p>
       <form className="autoplan-form" onSubmit={propose}>
@@ -173,34 +174,34 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
         <label>최대 투자 금액<input required type="number" min="0" step="any" value={proposeForm.max_investment} onChange={event => setProposeForm(current => ({ ...current, max_investment: event.target.value }))} placeholder="10000000" /></label>
         <label>최대 손실 금액<input required type="number" min="0" step="any" value={proposeForm.max_loss} onChange={event => setProposeForm(current => ({ ...current, max_loss: event.target.value }))} placeholder="300000" /></label>
         <div className="toolbar">
-          <button className="primary" disabled={busy}>제안 받기</button>
-          {proposal && <button type="button" className="ghost" onClick={() => { setProposal(null); setPicked(null); }}>결과 지우기</button>}
+          <button className="btn btn--primary" disabled={busy}>제안 받기</button>
+          {proposal && <button type="button" className="btn btn--ghost" onClick={() => { setProposal(null); setPicked(null); }}>결과 지우기</button>}
         </div>
       </form>
-      {proposal && <div className="autoplan-result">
+      {proposal && <div className="stack">
         <div className="autoplan-head">
           <strong>{proposal.name || proposal.ticker}</strong>
           <code>{proposal.ticker}</code>
-          <span className={`badge ${proposal.side === 'sell' ? 'badge-sell' : 'badge-buy'}`}>{proposal.side === 'sell' ? '매도' : '매수'}</span>
-          <span className="badge badge-binding">{bindingLabel[proposal.binding] || proposal.binding}</span>
+          <span className="badge" data-tone={proposal.side === 'sell' ? 'sell' : 'buy'}>{proposal.side === 'sell' ? '매도' : '매수'}</span>
+          <span className="badge" data-tone="accent">{bindingLabel[proposal.binding] || proposal.binding}</span>
           <span className="subtle">기준일 {proposal.as_of || '—'} · 최근 종가 {won(proposal.reference_close)} · ATR {won(proposal.atr)}({proposal.atr_pct.toFixed(2)}%) · 표본 {proposal.sample.observations.toLocaleString('ko-KR')}건 / {proposal.sample.horizon_days}봉 추적</span>
         </div>
         {proposal.binding === 'max_loss' && <div className="subtle">최대 손실 금액이 수량을 결정하고 있어 최대 투자 금액 {won(proposal.max_investment)}은 실제로 제약이 되지 않습니다. 후보의 실투자액이 한도에 훨씬 못 미칠 수 있습니다.</div>}
-        {proposal.warnings.length > 0 && <div className="notice autoplan-warnings">
+        {proposal.warnings.length > 0 && <div className="msg autoplan-warnings" data-tone="warn">
           <b>확인하세요</b>
           <ul>{proposal.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
         </div>}
-        <div className="autoplan-reason"><span className="badge badge-on">권장</span><span>{proposal.recommendation_reason}</span></div>
+        <div className="autoplan-reason"><span className="badge" data-tone="ok">권장</span><span>{proposal.recommendation_reason}</span></div>
         <div className="autoplan-scroll">
-          <table className="autoplan-table">
-            <thead><tr>{candidateColumns.map(column => <td key={column.label} className={column.num ? 'num' : undefined} title={column.title}><b>{column.label}</b></td>)}</tr></thead>
+          <table className="table table--rows table--nowrap">
+            <thead><tr>{candidateColumns.map(column => <th key={column.label} className={column.num ? 'num' : undefined} title={column.title}>{column.label}</th>)}</tr></thead>
             <tbody>{proposal.candidates.map((candidate, index) => {
               const blocked = candidate.rejected !== null;
               const chosen = picked === index;
               const shortfall = candidate.breakeven_tp1_prob != null && candidate.reach_tp1_prob != null && candidate.reach_tp1_prob < candidate.breakeven_tp1_prob;
-              return <tr key={candidate.stop_atr_multiple} className={`${blocked ? 'blocked' : ''}${chosen ? ' picked' : ''}`} onClick={blocked ? undefined : () => setPicked(index)}>
+              return <tr key={candidate.stop_atr_multiple} className={blocked ? 'blocked' : undefined} aria-selected={chosen} onClick={blocked ? undefined : () => setPicked(index)}>
                 <td><input type="radio" name="autoplan-candidate" checked={chosen} disabled={blocked} onChange={() => setPicked(index)} /></td>
-                <td>ATR {candidate.stop_atr_multiple}배{index === proposal.recommended && <span className="badge badge-on">권장</span>}</td>
+                <td>ATR {candidate.stop_atr_multiple}배{index === proposal.recommended && <span className="badge" data-tone="ok">권장</span>}</td>
                 <td className="num">{won(candidate.stop_price)}</td>
                 <td className="num">{num(candidate.quantity)}주</td>
                 {blocked
@@ -214,7 +215,7 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
                     <td className="num">{won(candidate.tp2_price)} <span className="subtle">{pct(candidate.tp2_ratio)}</span></td>
                     <td className="num">{pct(candidate.reach_tp1_prob)}</td>
                     <td className="num">{pct(candidate.reach_tp2_prob)}</td>
-                    <td className={`num ${shortfall ? 'red' : 'ok'}`} title={`본전이 되려면 1차 목표 도달률 ${pct(candidate.breakeven_tp1_prob)} 이상 필요`}>{pct(candidate.breakeven_tp1_prob)}</td>
+                    <td className={`num ${shortfall ? 'up' : 'ok'}`} title={`본전이 되려면 1차 목표 도달률 ${pct(candidate.breakeven_tp1_prob)} 이상 필요`}>{pct(candidate.breakeven_tp1_prob)}</td>
                     <td className="num muted" title="진입 근거가 없을 때의 과거 기준선입니다. 예측이 아닙니다.">{candidate.baseline_expectancy_r == null ? '—' : `${candidate.baseline_expectancy_r.toFixed(2)}R`}</td>
                     <td className="num">{candidate.tp3_trailing_pct == null ? '—' : `${candidate.tp3_trailing_pct}%`}</td>
                   </>}
@@ -228,17 +229,16 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
           <li><b>최대손실액</b> — 손절가에 그대로 체결된다는 전제의 값입니다. 갭 하락으로 손절가를 건너뛰면 최대 손실 금액은 보장되지 않습니다.</li>
         </ul>
         <div className="toolbar">
-          <button type="button" className="primary" disabled={!loadable} onClick={loadCandidate}>이 계획 불러오기</button>
+          <button type="button" className="btn btn--primary" disabled={!loadable} onClick={loadCandidate}>이 계획 불러오기</button>
           <span className="subtle">{loadable && pickedCandidate ? `선택: ATR ${pickedCandidate.stop_atr_multiple}배 · ${num(pickedCandidate.quantity)}주 · 손절 ${won(pickedCandidate.stop_price)}` : '표에서 후보를 선택하세요.'}</span>
         </div>
       </div>}
     </section>
 
     <section className="panel plan-editor">
-      <div className="section-title">TRADE PLAN</div>
       <h1>{form.id === null ? '새 계획' : `계획 편집 #${form.id}`}</h1>
       <p className="subtle">진입가 돌파 시 진입 주문이 나가고, 손절가 이탈 시 즉시 전량 청산합니다. 1차·2차는 목표가 도달 시 지정 비율만큼 시장가 익절하고, 나머지는 트레일링 스탑으로 관리합니다. 실주문은 위의 실주문 실행 버튼으로만 전송됩니다.</p>
-      <form onSubmit={submit} className="indicator-form">
+      <form onSubmit={submit} className="form-grid">
         <label>이름<input required value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="삼성전자 돌파매수" /></label>
         <label>티커<input required pattern="[0-9A-Z]{6}" value={form.ticker} onChange={event => setForm(current => ({ ...current, ticker: event.target.value.toUpperCase() }))} placeholder="005930" /></label>
         <label>방향<select value={form.side} onChange={event => setForm(current => ({ ...current, side: event.target.value as 'buy' | 'sell' }))}><option value="buy">매수</option><option value="sell">매도</option></select></label>
@@ -253,52 +253,52 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
         <label>2차 익절 비율(%)<input required type="number" min="0" max="100" step="any" value={form.tp2_ratio} onChange={event => setForm(current => ({ ...current, tp2_ratio: event.target.value }))} placeholder="30" /></label>
         <label>3차 트레일링 스탑(%)<input required type="number" min="0" step="any" value={form.tp3_trailing_pct} onChange={event => setForm(current => ({ ...current, tp3_trailing_pct: event.target.value }))} placeholder="5" /></label>
         <label className="check"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />계획 사용</label>
-        <label className="formula-field">메모<input value={form.note} onChange={event => setForm(current => ({ ...current, note: event.target.value }))} placeholder="박스권 상단 돌파 / 실적 발표 전 청산" /></label>
-        <div className="toolbar"><button className="primary" disabled={busy}>저장</button><button type="button" className="ghost" onClick={() => setForm(emptyForm)}>새 계획</button></div>
+        <label className="wide">메모<input value={form.note} onChange={event => setForm(current => ({ ...current, note: event.target.value }))} placeholder="박스권 상단 돌파 / 실적 발표 전 청산" /></label>
+        <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button><button type="button" className="btn btn--ghost" onClick={() => setForm(emptyForm)}>새 계획</button></div>
       </form>
     </section>
 
     <section className="panel plan-list">
-      <div className="section-title">PLANS <span className="badge">{plans.length}</span></div>
+      <div className="section-title">계획 <span className="badge">{plans.length}</span></div>
       {plans.map(plan => {
         const evaluation = evaluationOf.get(plan.id);
         return <article className="plan-item" key={plan.id}>
           <div className="plan-head">
             <strong>{plan.name}</strong>
-            <span className={`badge ${plan.side === 'sell' ? 'badge-sell' : 'badge-buy'}`}>{plan.side === 'sell' ? '매도' : '매수'}</span>
+            <span className="badge" data-tone={plan.side === 'sell' ? 'sell' : 'buy'}>{plan.side === 'sell' ? '매도' : '매수'}</span>
             <code>{plan.ticker}</code>
             <span className="subtle">{num(plan.quantity)}주 · {plan.order_type === 'market' ? '시장가' : `지정가 ${won(plan.limit_price)}`}</span>
-            <span className={`badge ${plan.enabled ? 'badge-on' : 'badge-off'}`}>{plan.enabled ? '사용' : '중지'}</span>
+            <span className="badge" data-tone={plan.enabled ? 'ok' : undefined}>{plan.enabled ? '사용' : '중지'}</span>
             <span className="badge">{evaluation ? phaseLabel[evaluation.phase] || evaluation.phase : '평가 없음'}</span>
           </div>
-          <p className="subtle">진입 {won(plan.entry_price)} · 손절 {won(plan.stop_price)} · 1차 {won(plan.tp1_price)}({pct(plan.tp1_ratio)}) · 2차 {won(plan.tp2_price)}({pct(plan.tp2_ratio)}) · 트레일링 {plan.tp3_trailing_pct}%</p>
+          <p className="code-note">진입 {won(plan.entry_price)} · 손절 {won(plan.stop_price)} · 1차 {won(plan.tp1_price)}({pct(plan.tp1_ratio)}) · 2차 {won(plan.tp2_price)}({pct(plan.tp2_ratio)}) · 트레일링 {plan.tp3_trailing_pct}%</p>
           <div className="plan-eval">
             <span className={evaluation?.triggered ? 'ok' : 'subtle'}>{evaluation ? (evaluation.next_leg ? `${evaluation.triggered ? '●' : '○'} 다음 동작: ${legLabel[evaluation.next_leg]}` : '○ 대기') : '평가 없음'}</span>
             <span className="subtle">{evaluation?.reason || ''}</span>
             <span className="subtle">{evaluation?.as_of || '기준일 없음'} · 종가 {won(evaluation?.close ?? null)}</span>
           </div>
           {plan.note && <div className="subtle">{plan.note}</div>}
-          <div className="toolbar"><button className="ghost" onClick={() => showOnChart(plan)} title="계획의 가격을 종목 상세 차트에 블록으로 띄웁니다">차트에서 보기</button><button className="ghost" onClick={() => edit(plan)}>편집</button><button className="danger" onClick={() => remove(plan)}>삭제</button></div>
+          <div className="toolbar toolbar--tight"><button className="btn btn--ghost btn--sm" onClick={() => showOnChart(plan)} title="계획의 가격을 종목 상세 차트에 블록으로 띄웁니다">차트에서 보기</button><button className="btn btn--ghost btn--sm" onClick={() => edit(plan)}>편집</button><button className="btn btn--danger btn--sm" onClick={() => remove(plan)}>삭제</button></div>
         </article>;
       })}
       {!plans.length && <div className="empty">등록된 트레이딩 계획이 없습니다.</div>}
     </section>
 
     <section className="panel order-panel">
-      <div className="section-title">ORDER LOG <span className="badge">{orders.length}</span></div>
-      <div className="order-scroll">
-        <table className="order-table">
-          <thead><tr>{['요청시각', '계획', '단계', '티커', '방향', '수량', '상태', '체결', '체결가', '브로커 주문번호', '메시지'].map(label => <td key={label}><b>{label}</b></td>)}</tr></thead>
+      <div className="section-title">주문 기록 <span className="badge">{orders.length}</span></div>
+      <div className="table-scroll">
+        <table className="table table--nowrap">
+          <thead><tr>{['요청시각', '계획', '단계', '티커', '방향', '수량', '상태', '체결', '체결가', '브로커 주문번호', '메시지'].map(label => <th key={label}>{label}</th>)}</tr></thead>
           <tbody>{orders.map(order => <tr key={order.id}>
             <td className="mono">{order.requested_at.replace('T', ' ').slice(0, 16)}</td>
             <td>{order.plan_name || '—'}</td>
             <td className="subtle">{order.leg ? legLabel[order.leg] || order.leg : '—'}</td>
             <td className="mono">{order.ticker}</td>
-            <td className={order.side === 'sell' ? 'blue' : 'red'}>{order.side === 'sell' ? '매도' : '매수'}</td>
-            <td className="mono">{num(order.quantity)}</td>
-            <td><span className={`order-status ${statusTone[order.status] || 'idle'}`}>{statusLabel[order.status] || order.status}</span></td>
-            <td className="mono">{num(order.filled_quantity)}</td>
-            <td className="mono">{won(order.filled_price)}</td>
+            <td className={order.side === 'sell' ? 'down' : 'up'}>{order.side === 'sell' ? '매도' : '매수'}</td>
+            <td className="num">{num(order.quantity)}</td>
+            <td><span className="badge" data-tone={statusTone[order.status]}>{statusLabel[order.status] || order.status}</span></td>
+            <td className="num">{num(order.filled_quantity)}</td>
+            <td className="num">{won(order.filled_price)}</td>
             <td className="mono">{order.broker_order_id || '—'}</td>
             <td className="subtle">{order.message || ''}</td>
           </tr>)}</tbody>

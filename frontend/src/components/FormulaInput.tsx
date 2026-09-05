@@ -82,7 +82,7 @@ export default function FormulaInput({ value, onChange, suggestions, multiline =
   };
 
   return <div className="formula-input" ref={wrapper}>
-    {multiline ? <textarea {...shared} /> : <input className="control" {...shared} />}
+    {multiline ? <textarea {...shared} /> : <input {...shared} />}
     {matches.length > 0 && <ul className="formula-suggest" role="listbox" aria-label="지표 자동완성" ref={list}>
       {matches.map((item, index) => <li key={item.key} role="option" aria-selected={index === active} className={index === active ? 'active' : undefined} onMouseDown={event => { event.preventDefault(); apply(item); }} onClick={() => apply(item)} onMouseEnter={() => setActive(index)}>
         <code>{item.key}</code><span>{item.label}</span><em>{item.detail}</em>

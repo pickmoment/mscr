@@ -80,10 +80,10 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
   };
 
   return <div className="position-planner">
-    <div className="toolbar" style={{ gap: 6, margin: 0 }}>
+    <div className="toolbar toolbar--tight">
       <div className="section-title">포지션</div>
-      <button className="ghost" style={{ marginLeft: 'auto', padding: '3px 9px', minHeight: 24, fontSize: 11 }} onClick={onReset} title="현재가 기준 손절 -5% · 청산 +10%로 되돌립니다">초기화</button>
-      <button className="ghost" style={{ padding: '3px 9px', minHeight: 24, fontSize: 11 }} onClick={onClose}>닫기</button>
+      <button className="btn btn--quiet btn--sm push" onClick={onReset} title="현재가 기준 손절 -5% · 청산 +10%로 되돌립니다">초기화</button>
+      <button className="btn btn--quiet btn--sm" onClick={onClose}>닫기</button>
     </div>
     {editableLevels.map(level => <label key={level} className="planner-field">
       <span className={levelClass[level]}>{levelLabel[level]}</span>
@@ -97,7 +97,7 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
     </label>}
     <label className="planner-field"><span>수량</span><input type="number" min="0" step="1" value={plan.quantity || ''} aria-label="수량" onChange={event => onChange({ ...plan, quantity: Math.max(0, Math.floor(number(event.target.value))) })} /></label>
     <div className="planner-readout">
-      <span title="청산까지의 폭 ÷ 손절까지의 폭. 전량을 그 가격에 청산했을 때의 배수이며 분할 비중은 빠져 있습니다."><i className="subtle">손익비</i> <b className={metrics.rr !== null && metrics.rr >= 1 ? 'red' : 'blue'}>{metrics.rr === null ? '—' : `${metrics.rr.toFixed(2)}R`}</b></span>
+      <span title="청산까지의 폭 ÷ 손절까지의 폭. 전량을 그 가격에 청산했을 때의 배수이며 분할 비중은 빠져 있습니다."><i className="subtle">손익비</i> <b className={metrics.rr !== null && metrics.rr >= 1 ? 'up' : 'down'}>{metrics.rr === null ? '—' : `${metrics.rr.toFixed(2)}R`}</b></span>
       <span className="level-stop"><i>손절 {rate(metrics.stopPct)}</i>{plan.quantity > 0 && <b>-{won(metrics.loss)}</b>}</span>
       <span className="level-target" title="전량을 1차 청산가에 넘겼을 때의 손익입니다. 분할하면 아래 '계획 합계'의 1차 몫만 실현됩니다."><i>청산 {rate(metrics.targetPct)}</i>{plan.quantity > 0 && <b>+{won(metrics.gain)}</b>}</span>
       {plan.target2 !== null && <span className="level-target2" title="전량을 2차 청산가에 넘겼을 때의 배수입니다."><i>2차 청산 {rate(metrics.target2Pct)}</i><b>{metrics.rr2 === null ? '—' : `${metrics.rr2.toFixed(2)}R`}</b></span>}
@@ -107,7 +107,7 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
     {outcome && <div className="planner-readout plan-legs">
       <span title="손절에 닿지 않고 1·2차 목표에 도달하고, 3차는 2차 도달 직후 되돌림(하한)으로 청산됐을 때의 합계입니다. 확률은 반영하지 않습니다.">
         <i className="subtle">계획 합계</i>
-        <b className={outcome.totalR !== null && outcome.totalR >= 1 ? 'red' : 'blue'}>{outcome.totalR === null ? '—' : `${outcome.totalR.toFixed(2)}R`}{plan.quantity > 0 ? ` · ${signedWon(outcome.totalAmount)}` : ''}</b>
+        <b className={outcome.totalR !== null && outcome.totalR >= 1 ? 'up' : 'down'}>{outcome.totalR === null ? '—' : `${outcome.totalR.toFixed(2)}R`}{plan.quantity > 0 ? ` · ${signedWon(outcome.totalAmount)}` : ''}</b>
       </span>
       {outcome.legs.map(leg => <span key={leg.key} className={leg.key === 'tp1' ? 'level-target' : leg.key === 'tp2' ? 'level-target2' : 'subtle'}
         title={leg.floor
@@ -118,15 +118,15 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
       </span>)}
     </div>}
     {!form && <>
-      <span className="subtle planner-hint">{plan.origin ? `계획 "${plan.origin.name}"에 연결됨 · 선을 끌어 고친 뒤 수정하세요.` : '차트의 선을 위아래로 끌어 조정합니다.'}</span>
-      <button className="ghost" onClick={openForm} title={plan.origin ? '연결된 트레이딩 계획을 이 가격으로 수정합니다' : '그린 가격을 트레이딩 계획으로 저장합니다'}>{plan.origin ? '계획 수정' : '계획 만들기'}</button>
+      <span className="subtle">{plan.origin ? `계획 "${plan.origin.name}"에 연결됨 · 선을 끌어 고친 뒤 수정하세요.` : '차트의 선을 위아래로 끌어 조정합니다.'}</span>
+      <button className="btn btn--ghost btn--block" onClick={openForm} title={plan.origin ? '연결된 트레이딩 계획을 이 가격으로 수정합니다' : '그린 가격을 트레이딩 계획으로 저장합니다'}>{plan.origin ? '계획 수정' : '계획 만들기'}</button>
     </>}
     {form && <div className="plan-form">
-      <div className="toolbar" style={{ gap: 6, margin: 0 }}>
+      <div className="toolbar toolbar--tight">
         <div className="section-title">{form.id === null ? '새 계획' : '계획 수정'}</div>
-        <span className={`badge ${metrics.long ? 'badge-buy' : 'badge-sell'}`}>{metrics.long ? '매수' : '매도'}</span>
+        <span className="badge" data-tone={metrics.long ? 'buy' : 'sell'}>{metrics.long ? '매수' : '매도'}</span>
       </div>
-      <label className="planner-field"><span>이름</span><input type="text" style={{ textAlign: 'left' }} value={form.name} aria-label="계획 이름" onChange={event => setForm({ ...form, name: event.target.value })} /></label>
+      <label className="planner-field"><span>이름</span><input type="text" value={form.name} aria-label="계획 이름" onChange={event => setForm({ ...form, name: event.target.value })} /></label>
       <label className="planner-field"><span className="level-target">1차 비율</span><input type="number" min="1" max="98" step="1" value={form.tp1Ratio} aria-label="1차 익절 비율" onChange={event => setForm({ ...form, tp1Ratio: event.target.value })} /></label>
       <label className="planner-field"><span className="level-target2">2차 비율</span><input type="number" min="1" max="98" step="1" value={form.tp2Ratio} aria-label="2차 익절 비율" onChange={event => setForm({ ...form, tp2Ratio: event.target.value })} /></label>
       <label className="planner-field"><span>트레일링</span><input type="number" min="0" step="0.1" value={form.trailing} aria-label="트레일링 스탑 비율" onChange={event => setForm({ ...form, trailing: event.target.value })} /></label>
@@ -134,11 +134,11 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
       <div className="planner-readout">
         {blocked && <span className="planner-warning">{blocked}</span>}
       </div>
-      <div className="toolbar" style={{ gap: 6, margin: 0 }}>
-        <button className="primary" style={{ flex: 1 }} disabled={busy || blocked !== null} onClick={save}>{form.id === null ? '저장' : '수정'}</button>
-        <button className="ghost" onClick={closeForm}>취소</button>
+      <div className="toolbar toolbar--tight">
+        <button className="btn btn--primary btn--block" disabled={busy || blocked !== null} onClick={save}>{form.id === null ? '저장' : '수정'}</button>
+        <button className="btn btn--ghost" onClick={closeForm}>취소</button>
       </div>
     </div>}
-    {message && <div className="notice">{message}</div>}
+    {message && <div className="msg">{message}</div>}
   </div>;
 }

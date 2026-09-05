@@ -94,79 +94,85 @@ export default function WatchlistPanel({ onSelect }: { onSelect: SelectTicker })
   };
 
   return <div className="watchlist-layout">
-    <aside className="panel scroll" style={{ padding: 18 }}>
-      <div className="section-title" style={{ marginTop: 0 }}>WATCHLISTS</div>
-      <div className="watchlist-groups">
-        {lists.map(list => <button key={list.id} className={`watchlist-group ${list.id === selectedId ? 'active' : ''}`} onClick={() => setSelectedId(list.id)}>
-          <span>{list.name}</span><span className="badge">{list.item_count}</span>
-        </button>)}
-        {!lists.length && <div className="subtle">아직 관심목록이 없습니다. 아래에서 만들어 보세요.</div>}
-      </div>
-      <div className="toolbar" style={{ marginTop: 14 }}>
-        <input placeholder="새 목록 이름" value={newName} maxLength={60} onChange={event => setNewName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createList(); }} />
-        <button className="primary" onClick={createList} disabled={!newName.trim()}>목록 추가</button>
-      </div>
-      {selectedId != null && <>
-        <div className="section-title" style={{ marginTop: 22 }}>이름 변경</div>
-        <div className="toolbar">
-          <input value={renameValue} maxLength={60} onChange={event => setRenameValue(event.target.value)} />
-          <button className="ghost" disabled={!renameValue.trim() || renameValue.trim() === detail?.name} onClick={() => run(() => api.renameWatchlist(selectedId, renameValue.trim()), '이름을 바꿨습니다.', '이름을 바꿀 수 없습니다.')}>변경</button>
+    <aside className="panel panel--pad scroll">
+      <div className="stack stack--lg">
+        <div>
+          <div className="section-title">관심목록</div>
+          <div className="list-nav">
+            {lists.map(list => <button key={list.id} aria-current={list.id === selectedId} onClick={() => setSelectedId(list.id)}>
+              <span>{list.name}</span><span className="badge">{list.item_count}</span>
+            </button>)}
+            {!lists.length && <div className="subtle">아직 관심목록이 없습니다. 아래에서 만들어 보세요.</div>}
+          </div>
         </div>
-        <button className="danger" style={{ marginTop: 12 }} onClick={() => { if (window.confirm(`'${detail?.name}' 목록과 편입 종목을 모두 지웁니다. 계속할까요?`)) run(() => api.deleteWatchlist(selectedId), '목록을 지웠습니다.', '목록을 지울 수 없습니다.'); }}>목록 삭제</button>
-      </>}
-      {message && <div className="notice" style={{ marginTop: 14 }}>{message}</div>}
+        <div className="toolbar toolbar--tight">
+          <input placeholder="새 목록 이름" value={newName} maxLength={60} onChange={event => setNewName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createList(); }} />
+          <button className="btn btn--primary" onClick={createList} disabled={!newName.trim()}>목록 추가</button>
+        </div>
+        {selectedId != null && <div className="stack">
+          <div className="section-title">이름 변경</div>
+          <div className="toolbar toolbar--tight">
+            <input value={renameValue} maxLength={60} onChange={event => setRenameValue(event.target.value)} />
+            <button className="btn btn--ghost" disabled={!renameValue.trim() || renameValue.trim() === detail?.name} onClick={() => run(() => api.renameWatchlist(selectedId, renameValue.trim()), '이름을 바꿨습니다.', '이름을 바꿀 수 없습니다.')}>변경</button>
+          </div>
+          <div className="toolbar">
+            <button className="btn btn--danger" onClick={() => { if (window.confirm(`'${detail?.name}' 목록과 편입 종목을 모두 지웁니다. 계속할까요?`)) run(() => api.deleteWatchlist(selectedId), '목록을 지웠습니다.', '목록을 지울 수 없습니다.'); }}>목록 삭제</button>
+          </div>
+        </div>}
+        {message && <div className="msg">{message}</div>}
+      </div>
     </aside>
 
     {detail == null
       ? <div className="panel empty">관심목록을 선택하거나 새로 만드세요.</div>
       : <div className="watchlist-main">
-        <div className="card-grid">
+        <div className="grid grid--4">
           {([['종목 수', `${detail.summary.count}종목`], ['평균 등락률', signedPct(detail.summary.avg_change_pct)], ['상승 / 하락', `${detail.summary.up} / ${detail.summary.down}`], ['목표가 도달', `${detail.summary.reached_target}종목`]] as const).map(([label, value]) => <div className="stat-card" key={label}>
             <label>{label}</label><strong className={label === '평균 등락률' ? changeClass(detail.summary.avg_change_pct) : ''}>{value}</strong>
           </div>)}
         </div>
-        <div className="panel table-panel">
+        <div className="panel panel--tight scroll">
           <div className="toolbar">
-            <div className="section-title" style={{ margin: 0 }}>{detail.name} <span className="badge">{detail.rows.length}</span></div>
+            <div className="section-title">{detail.name} <span className="badge">{detail.rows.length}</span></div>
             <span className="badge">{detail.as_of || '시세 없음'} 기준</span>
-            {detail.summary.stale && <span className="badge">일부 시세 없음</span>}
-            <form className="toolbar" style={{ margin: 0, marginLeft: 'auto' }} onSubmit={addItem}>
-              <input placeholder="종목코드 6자리" value={form.ticker} maxLength={6} onChange={event => setForm(current => ({ ...current, ticker: event.target.value.replace(/\D/g, '') }))} />
-              <input placeholder="목표가" type="number" min="0" step="1" value={form.target_price} onChange={event => setForm(current => ({ ...current, target_price: event.target.value }))} />
-              <input placeholder="메모" value={form.memo} maxLength={500} onChange={event => setForm(current => ({ ...current, memo: event.target.value }))} />
-              <button className="primary" type="submit" disabled={form.ticker.length !== 6}>담기</button>
+            {detail.summary.stale && <span className="badge" data-tone="warn">일부 시세 없음</span>}
+            <form className="toolbar toolbar--tight push" onSubmit={addItem}>
+              <input className="w-sm" placeholder="종목코드 6자리" value={form.ticker} maxLength={6} onChange={event => setForm(current => ({ ...current, ticker: event.target.value.replace(/\D/g, '') }))} />
+              <input className="w-sm" placeholder="목표가" type="number" min="0" step="1" value={form.target_price} onChange={event => setForm(current => ({ ...current, target_price: event.target.value }))} />
+              <input className="w-md" placeholder="메모" value={form.memo} maxLength={500} onChange={event => setForm(current => ({ ...current, memo: event.target.value }))} />
+              <button className="btn btn--primary" type="submit" disabled={form.ticker.length !== 6}>담기</button>
             </form>
           </div>
-          {!!selected.length && <div className="toolbar" style={{ marginTop: 2, marginBottom: 8 }}>
-            <span className="badge">{selected.length}종목 선택</span>
-            <select value={targetList?.id ?? ''} aria-label="대상 목록" disabled={!otherLists.length} onChange={event => setTargetId(Number(event.target.value))}>
+          {!!selected.length && <div className="toolbar">
+            <span className="badge" data-tone="accent">{selected.length}종목 선택</span>
+            <select className="w-md" value={targetList?.id ?? ''} aria-label="대상 목록" disabled={!otherLists.length} onChange={event => setTargetId(Number(event.target.value))}>
               {otherLists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}
               {!otherLists.length && <option value="">다른 목록 없음</option>}
             </select>
-            <button className="ghost" disabled={!targetList} onClick={() => runBulk('move')} title="선택 종목을 대상 목록으로 옮깁니다">옮기기</button>
-            <button className="ghost" disabled={!targetList} onClick={() => runBulk('copy')} title="선택 종목을 대상 목록에도 담습니다">복사</button>
-            <button className="danger" onClick={() => runBulk('delete')}>선택 빼기</button>
-            <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => setSelected([])}>선택 해제</button>
+            <button className="btn btn--ghost" disabled={!targetList} onClick={() => runBulk('move')} title="선택 종목을 대상 목록으로 옮깁니다">옮기기</button>
+            <button className="btn btn--ghost" disabled={!targetList} onClick={() => runBulk('copy')} title="선택 종목을 대상 목록에도 담습니다">복사</button>
+            <button className="btn btn--danger" onClick={() => runBulk('delete')}>선택 빼기</button>
+            <button className="btn btn--ghost push" onClick={() => setSelected([])}>선택 해제</button>
           </div>}
-          <table className="metric-table watchlist-table">
+          <table className="table table--nowrap">
             <thead><tr>
-              <td><input type="checkbox" aria-label="전체 선택" checked={detail.rows.length > 0 && selected.length === detail.rows.length} onChange={event => setSelected(event.target.checked ? detail.rows.map(row => row.ticker) : [])} /></td>
-              {['종목', '종가', '등락률', '편입가', '편입 후', '목표가', '목표까지', '메모', ''].map(label => <td key={label}><b>{label}</b></td>)}
+              <th><input type="checkbox" aria-label="전체 선택" checked={detail.rows.length > 0 && selected.length === detail.rows.length} onChange={event => setSelected(event.target.checked ? detail.rows.map(row => row.ticker) : [])} /></th>
+              {['종목', '종가', '등락률', '편입가', '편입 후', '목표가', '목표까지', '메모', ''].map(label => <th key={label}>{label}</th>)}
             </tr></thead>
             <tbody>
-              {detail.rows.map(row => <tr key={row.ticker} className={selected.includes(row.ticker) ? 'selected' : ''}>
+              {detail.rows.map(row => <tr key={row.ticker} aria-selected={selected.includes(row.ticker)}>
                 <td><input type="checkbox" aria-label={`${row.name} 선택`} checked={selected.includes(row.ticker)} onChange={event => setSelected(current => event.target.checked ? [...current, row.ticker] : current.filter(item => item !== row.ticker))} /></td>
-                <td className="rank-row" onClick={() => onSelect(row.ticker, detail.rows.map(item => item.ticker))} title="종목 상세로 이동">{row.name}<span className="subtle mono"> {row.ticker}</span>{row.halted ? ' ⏸' : ''}</td>
-                <td className="mono">{won(row.close)}</td>
-                <td className={`mono ${changeClass(row.change_pct)}`}>{signedPct(row.change_pct)}</td>
-                <td className="mono">{won(row.added_price)}</td>
-                <td className={`mono ${changeClass(row.since_added_pct)}`}>{signedPct(row.since_added_pct)}</td>
-                <td><input className="cell-input mono" type="number" min="0" step="1" defaultValue={row.target_price ?? ''} key={`target-${row.ticker}-${row.target_price ?? ''}`} aria-label={`${row.name} 목표가`}
+                <td onClick={() => onSelect(row.ticker, detail.rows.map(item => item.ticker))} title="종목 상세로 이동">{row.name}<span className="subtle mono"> {row.ticker}</span>{row.halted ? ' ⏸' : ''}</td>
+                <td className="num">{won(row.close)}</td>
+                <td className={`num ${changeClass(row.change_pct)}`}>{signedPct(row.change_pct)}</td>
+                <td className="num">{won(row.added_price)}</td>
+                <td className={`num ${changeClass(row.since_added_pct)}`}>{signedPct(row.since_added_pct)}</td>
+                <td><input className="cell-input" type="number" min="0" step="1" defaultValue={row.target_price ?? ''} key={`target-${row.ticker}-${row.target_price ?? ''}`} aria-label={`${row.name} 목표가`}
                   onBlur={event => { const raw = event.target.value.trim(); const next = raw ? Number(raw) : null; if (next !== row.target_price) patchItem(row.ticker, row.memo, next); }} /></td>
-                <td className={`mono ${row.target_gap_pct != null && row.target_gap_pct <= 0 ? 'change-up' : ''}`}>{signedPct(row.target_gap_pct)}</td>
+                <td className={`num ${row.target_gap_pct != null && row.target_gap_pct <= 0 ? 'change-up' : ''}`}>{signedPct(row.target_gap_pct)}</td>
                 <td><input className="cell-input" defaultValue={row.memo ?? ''} maxLength={500} key={`memo-${row.ticker}-${row.memo ?? ''}`} aria-label={`${row.name} 메모`}
                   onBlur={event => { const next = event.target.value.trim() || null; if (next !== row.memo) patchItem(row.ticker, next, row.target_price); }} /></td>
-                <td><button className="ghost" aria-label={`${row.name} 관심목록에서 빼기`} onClick={() => run(() => api.deleteWatchlistItem(detail.id, row.ticker), `${row.name}을(를) 뺐습니다.`, '삭제할 수 없습니다.')}>빼기</button></td>
+                <td><button className="btn btn--ghost btn--sm" aria-label={`${row.name} 관심목록에서 빼기`} onClick={() => run(() => api.deleteWatchlistItem(detail.id, row.ticker), `${row.name}을(를) 뺐습니다.`, '삭제할 수 없습니다.')}>빼기</button></td>
               </tr>)}
               {!detail.rows.length && <tr><td colSpan={10} className="subtle">담은 종목이 없습니다. 종목코드를 입력해 담거나 종목 상세에서 ★ 버튼을 누르세요.</td></tr>}
             </tbody>
