@@ -223,14 +223,22 @@ def truncate_price_jump(valid: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
 _WEIGHTED_RETURN_WEIGHTS = ((63, 0.4), (126, 0.2), (189, 0.2), (252, 0.2))
 
 
-def weighted_return_score(frame: pd.DataFrame, as_of_offset: int = 0) -> float | None:
+def _as_of_date(days: list[str], as_of_offset: int) -> str | None:
+    """오프셋(거래일 수)을 실제 날짜로 바꾼다. 종목마다 결측·정지 봉 수가 달라 '행 개수'로 되감으면
+    같은 오프셋이 종목마다 다른 날짜를 가리키고, 지표가 조용히 다른 날 값이 된다. 기준일은 항상
+    시장 전체의 거래일로 정한다. 데이터 시작보다 더 거슬러 올라가면 빈 문자열을 돌려 결과를 비운다."""
+    if as_of_offset <= 0: return None
+    return days[-1 - as_of_offset] if as_of_offset < len(days) else ""
+
+
+def weighted_return_score(frame: pd.DataFrame, as_of_date: str | None = None) -> float | None:
     """최근 3·6·9·12개월(거래일 63/126/189/252) 누적수익률의 가중평균(0.4/0.2/0.2/0.2, 최근
     분기에 가중). 퍼센트 단위로 반환한다(`change_pct`와 동일한 표기). 12개월치 유효 봉이 없으면
     계산할 수 없다."""
     frame = frame.sort_values("date")
+    if as_of_date is not None:
+        frame = frame[frame["date"] <= as_of_date]
     valid = frame[~frame["halted"].astype(bool)].copy().reset_index(drop=True)
-    if as_of_offset > 0:
-        valid = valid.iloc[: len(valid) - as_of_offset]
     valid, _ = truncate_price_jump(valid)
     if len(valid) < _WEIGHTED_RETURN_WEIGHTS[-1][0] + 1:
         return None
@@ -244,15 +252,13 @@ def weighted_return_score(frame: pd.DataFrame, as_of_offset: int = 0) -> float |
     return score * 100
 
 
-def calculate_group(frame: pd.DataFrame, expression: str | None = None, sort_expression: str | None = None, extras: dict[str, Any] | None = None, custom: list[dict[str, Any]] | None = None, as_of_offset: int = 0) -> dict[str, Any]:
+def calculate_group(frame: pd.DataFrame, expression: str | None = None, sort_expression: str | None = None, extras: dict[str, Any] | None = None, custom: list[dict[str, Any]] | None = None, as_of_date: str | None = None) -> dict[str, Any]:
     frame = frame.sort_values("date")
+    if as_of_date is not None:
+        frame = frame[frame["date"] <= as_of_date]
     valid = frame[~frame["halted"].astype(bool)].copy().reset_index(drop=True)
-    if as_of_offset > 0:
-        valid = valid.iloc[: len(valid) - as_of_offset]
     if valid.empty:
         return {}
-    if as_of_offset > 0:
-        frame = frame[frame["date"] <= valid.iloc[-1]["date"]]
     valid, price_jump_flag = truncate_price_jump(valid)
     env = {name: pd.Series(valid[name].to_numpy(dtype=float), index=valid["date"].tolist()) for name in SERIES_NAMES}
     env.update(extras or {})
@@ -273,13 +279,17 @@ def calculate_group(frame: pd.DataFrame, expression: str | None = None, sort_exp
 def ticker_snapshot(ticker: str, path=None, as_of_offset: int = 0) -> dict[str, Any]:
     with db_session(path) as db:
         rows = db.execute("SELECT date,open,high,low,close,volume,value,halted FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date", (ticker,)).fetchall()
+        days = [row[0] for row in db.execute("SELECT DISTINCT date FROM daily_bars WHERE source='krx_snapshot' ORDER BY date").fetchall()] if as_of_offset else []
     if not rows:
         return {}
     frame = pd.DataFrame([dict(row) for row in rows])
-    return calculate_group(frame, extras={"weighted_return": weighted_return_score(frame, as_of_offset)}, as_of_offset=as_of_offset)
+    as_of_date = _as_of_date(days, as_of_offset)
+    return calculate_group(frame, extras={"weighted_return": weighted_return_score(frame, as_of_date)}, as_of_date=as_of_date)
 
 
-def run_screen(spec: dict[str, Any], path=None) -> list[dict[str, Any]]:
+def screen_context(spec: dict[str, Any], path=None) -> dict[str, Any]:
+    """수식·유니버스를 검증하고 일봉·재무 스냅샷을 한 번만 읽어 둔다. 같은 스펙을 여러 기준일로
+    반복 평가할 때(신호 로그 수집·프리셋 검증) 데이터 적재를 되풀이하지 않기 위한 분리다."""
     universe = spec.get("universe", {})
     kinds = universe.get("kinds") or ["stock", "etf"]
     markets = universe.get("markets") or []
@@ -289,8 +299,7 @@ def run_screen(spec: dict[str, Any], path=None) -> list[dict[str, Any]]:
     sort_expression = str((spec.get("sort") or {}).get("formula", "close")).strip()
     if not formula or not sort_expression:
         raise ValueError("screen and sort formulas are required")
-    as_of_offset = int(spec.get("as_of_offset", 0) or 0)
-    if as_of_offset < 0:
+    if int(spec.get("as_of_offset", 0) or 0) < 0:
         raise ValueError("as_of_offset은 0 이상이어야 합니다")
     custom = custom_definitions(path)
     function_names = BUILTIN_FUNCTIONS | {item["key"] for item in custom}
@@ -310,20 +319,37 @@ def run_screen(spec: dict[str, Any], path=None) -> list[dict[str, Any]]:
         tickers = {row["ticker"] for row in instruments}
         bars = [dict(row) for row in db.execute("SELECT ticker,date,open,high,low,close,volume,value,halted FROM daily_bars WHERE source='krx_snapshot' ORDER BY ticker,date").fetchall() if row["ticker"] in tickers]
         fundamentals = {row["ticker"]: dict(row) for row in db.execute("SELECT f.* FROM snapshots_fundamental f JOIN (SELECT ticker,MAX(date) date FROM snapshots_fundamental GROUP BY ticker) x ON x.ticker=f.ticker AND x.date=f.date").fetchall()}
-    by_ticker = {ticker: group for ticker, group in pd.DataFrame(bars).groupby("ticker")} if bars else {}
+        days = [row[0] for row in db.execute("SELECT DISTINCT date FROM daily_bars WHERE source='krx_snapshot' ORDER BY date").fetchall()]
+    return {
+        "instruments": instruments, "days": days,
+        "by_ticker": {ticker: group for ticker, group in pd.DataFrame(bars).groupby("ticker")} if bars else {},
+        "fundamentals": fundamentals, "custom": custom, "formula": formula, "sort_expression": sort_expression,
+        "reverse": str((spec.get("sort") or {}).get("dir", "desc")).lower() != "asc",
+        "limit": max(1, min(int(spec.get("limit", 500)), 2000)),
+        "exclude_halted": bool(universe.get("exclude_halted")), "min_bars": int(universe.get("min_bars", 0)),
+    }
+
+
+def evaluate_context(context: dict[str, Any], as_of_offset: int = 0) -> list[dict[str, Any]]:
+    if as_of_offset < 0:
+        raise ValueError("as_of_offset은 0 이상이어야 합니다")
+    as_of_date = _as_of_date(context["days"], as_of_offset)
     output: list[dict[str, Any]] = []
-    for instrument in instruments:
-        group = by_ticker.get(instrument["ticker"])
+    for instrument in context["instruments"]:
+        group = context["by_ticker"].get(instrument["ticker"])
         if group is None:
             continue
-        fundamental = fundamentals.get(instrument["ticker"], {})
-        extras = {key: fundamental.get(key) for key in ("market_cap", "shares", "per", "pbr", "eps", "bps", "div")} | {"weighted_return": weighted_return_score(group, as_of_offset)}
-        values = calculate_group(group, formula, sort_expression, extras, custom, as_of_offset)
-        if universe.get("exclude_halted") and values.get("halted"):
+        fundamental = context["fundamentals"].get(instrument["ticker"], {})
+        extras = {key: fundamental.get(key) for key in ("market_cap", "shares", "per", "pbr", "eps", "bps", "div")} | {"weighted_return": weighted_return_score(group, as_of_date)}
+        values = calculate_group(group, context["formula"], context["sort_expression"], extras, context["custom"], as_of_date)
+        if context["exclude_halted"] and values.get("halted"):
             continue
-        if values.get("bars_available", 0) < int(universe.get("min_bars", 0)) or not values.get("_match"):
+        if values.get("bars_available", 0) < context["min_bars"] or not values.get("_match"):
             continue
         output.append(values | {key: instrument.get(key) for key in ("ticker", "name", "kind", "market")})
-    reverse = str((spec.get("sort") or {}).get("dir", "desc")).lower() != "asc"
-    output.sort(key=lambda row: (row.get("_sort") is not None, row.get("_sort") or -math.inf), reverse=reverse)
-    return output[: max(1, min(int(spec.get("limit", 500)), 2000))]
+    output.sort(key=lambda row: (row.get("_sort") is not None, row.get("_sort") or -math.inf), reverse=context["reverse"])
+    return output[: context["limit"]]
+
+
+def run_screen(spec: dict[str, Any], path=None) -> list[dict[str, Any]]:
+    return evaluate_context(screen_context(spec, path), int(spec.get("as_of_offset", 0) or 0))

@@ -89,6 +89,31 @@ def test_run_screen_as_of_offset_shifts_the_matched_bar(tmp_path):
         run_screen(base_spec | {"as_of_offset": -1}, path)
 
 
+def test_as_of_offset_counts_market_trading_days_not_a_tickers_own_bars(tmp_path):
+    """거래가 없어 봉이 빠진 종목도 같은 오프셋이면 같은 날짜를 기준으로 삼아야 한다. 종목별 행
+    개수로 되감으면 결측 봉만큼 기준일이 조용히 과거로 밀려 지표가 다른 날 값이 된다."""
+    path = tmp_path / "asof.db"
+    init_db(path)
+    days = ["2026-01-01", "2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07"]
+    with db_session(path) as db:
+        for ticker in ("000001", "000002"):
+            db.execute("INSERT INTO instruments(ticker,name,kind,market,is_preferred,is_spac,first_seen,last_seen,delisted) VALUES(?,?,'stock','KOSPI',0,0,?,?,0)", (ticker, ticker, days[0], days[-1]))
+        for index, day in enumerate(days):
+            close = 100.0 + index
+            db.execute("INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES('000001',?,'krx_snapshot',?,?,?,?,1000,100000,NULL,0)", (day, close, close, close, close))
+            # 000002는 2026-01-05·01-06 이틀 동안 거래가 없어 봉 자체가 없다.
+            if day not in ("2026-01-05", "2026-01-06"):
+                db.execute("INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES('000002',?,'krx_snapshot',?,?,?,?,1000,100000,NULL,0)", (day, close, close, close, close))
+
+    spec = {"universe": {"kinds": ["stock"], "markets": ["KOSPI"], "min_bars": 0}, "formula": "close > 0", "sort": {"formula": "close"}, "limit": 10, "as_of_offset": 3}
+    rows = {row["ticker"]: row for row in run_screen(spec, path)}
+
+    assert rows["000001"]["as_of"] == "2026-01-02"
+    # 기준일 2026-01-02에 000002의 마지막 봉도 2026-01-02다. 행 개수로 되감으면 2025-12-31 쪽으로 밀린다.
+    assert rows["000002"]["as_of"] == "2026-01-02"
+    assert rows["000002"]["close"] == 101.0
+
+
 def _definition(key: str, formula: str, parameters: str = '[{"name":"period","default":20,"min":1,"max":500,"integer":true}]') -> dict:
     return {"key": key, "label": key, "unit": "ratio", "formula": formula, "parameters": json.loads(parameters), "enabled": True}
 
