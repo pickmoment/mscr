@@ -101,6 +101,20 @@ def test_three_r_preset_selects_the_quietest_names_by_sort():
     # 우선주를 빼면 측정 기대값이 +0.50R에서 +0.38R로 떨어진다.
     assert preset["universe"]["exclude_preferred"] is False
 
+def test_box_breakout_preset_is_the_box_squeeze_set_plus_the_near_top_clause():
+    from mscr.ingest import PRESETS
+
+    squeeze = PRESETS["박스 조임 후보"]
+    breakout = PRESETS["박스 돌파 예정"]
+
+    # 측정된 주장이 "조임 후보 조건 + 상단 근접" 하위집합이라는 것이므로, 두 프리셋이 갈라지면 문서의 비교가 무효가 된다.
+    squeeze_clauses = {clause.strip() for clause in squeeze["formula"].split(" and ")}
+    breakout_clauses = {clause.strip() for clause in breakout["formula"].split(" and ")}
+    assert squeeze_clauses < breakout_clauses
+    assert breakout_clauses - squeeze_clauses == {"(rolling_max(high, 20) - close) / close <= 0.02"}
+    assert breakout["universe"] == squeeze["universe"]
+    assert breakout["sort"] == squeeze["sort"] and breakout["limit"] == squeeze["limit"]
+
 def _fdr_listing():
     return pd.DataFrame({
         "Code": ["005930", "000660"],
