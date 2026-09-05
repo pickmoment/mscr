@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, BarsResponse, ChartIndicatorParams, Instrument, Watchlist } from '../lib/api';
 import TickerChart from './TickerChart';
 import { ratio, won } from '../lib/format';
+import PositionPlanner from './PositionPlanner';
+import { defaultPlan, loadPositionPlans, POSITION_EVENT, PositionPlan, storePositionPlan } from '../lib/position';
 import { SelectTicker } from '../lib/nav';
 
 const defaultConfig: ChartIndicatorParams = { maPeriods: [5, 20, 60], rsiPeriod: 14, macdFast: 12, macdSlow: 26, macdSignal: 9, bbPeriod: 20, bbK: 2, volumeMaPeriod: 50 };
@@ -27,6 +29,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const [lists, setLists] = useState<Watchlist[]>([]);
   const [listId, setListId] = useState<number | null>(null);
   const [watchMessage, setWatchMessage] = useState('');
+  const [plan, setPlan] = useState<PositionPlan | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const loadLists = useCallback(() => {
     if (!ticker) return;
@@ -40,6 +43,15 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   useEffect(() => { localStorage.setItem(CHART_SETTINGS_KEY, JSON.stringify({ range, enabled, config, showParams })); }, [range, enabled, config, showParams]);
   useEffect(loadLists, [loadLists]);
   useEffect(() => { window.addEventListener('mscr-watchlist-changed', loadLists); return () => window.removeEventListener('mscr-watchlist-changed', loadLists); }, [loadLists]);
+  // 값이 같으면 그대로 둔다. 드래그로 저장할 때마다 이벤트가 돌아와 새 객체로 바뀌면 차트가 불필요하게 다시 그려진다.
+  const readPlan = useCallback(() => setPlan(current => {
+    const next = ticker ? loadPositionPlans()[ticker] ?? null : null;
+    return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+  }), [ticker]);
+  useEffect(readPlan, [readPlan]);
+  // 트레이딩 탭에서 계획을 차트로 보내면 같은 종목을 보고 있어도 블록을 다시 읽어야 한다.
+  useEffect(() => { window.addEventListener(POSITION_EVENT, readPlan); return () => window.removeEventListener(POSITION_EVENT, readPlan); }, [readPlan]);
+  const savePlan = useCallback((next: PositionPlan | null) => { setPlan(next); if (ticker) storePositionPlan(ticker, next); }, [ticker]);
   useEffect(() => {
     const navigate = (event: KeyboardEvent) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -65,6 +77,9 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const hasPrev = index > 0;
   const hasNext = index >= 0 && index < tickers.length - 1;
   const watched = lists.find(list => list.id === listId)?.contains ?? false;
+  // 보유 중이면 평단이 진입가다. 이미 잡은 포지션의 손절·청산을 그대로 그려 볼 수 있어야 한다.
+  const basePrice = detail.position?.avg_cost || Number(detail.quote.close) || 0;
+  const freshPlan = () => defaultPlan(basePrice, detail.kind, detail.position?.quantity ?? 0);
   const toggleWatch = async () => {
     try {
       if (watched && listId != null) await api.deleteWatchlistItem(listId, ticker);
@@ -101,7 +116,10 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
         </div>
       </div>
     </div>
-    <div className="panel chart-box"><div className="toolbar" style={{ marginBottom: 8 }}>{['3m','6m','1y','3y','max'].map(item => <button key={item} className={range === item ? 'primary' : 'ghost'} onClick={() => setRange(item)}>{item}</button>)}<span className="subtle" style={{ marginLeft: 'auto' }}>{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div><div style={{ height: 500 }}><TickerChart data={chart} light={light} /></div></div></div><aside className="panel scroll indicator-controls" style={{ padding: 18 }}><div className="toolbar" style={{ marginBottom: showParams ? 14 : 24 }}><div className="section-title" style={{ margin: 0 }}>PARAMETERS</div><button className="ghost" style={{ marginLeft: 'auto', padding: '3px 9px', minHeight: 24, fontSize: 11 }} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>
+    <div className="panel chart-box">
+      <div className="toolbar" style={{ marginBottom: 8 }}>{['3m','6m','1y','3y','max'].map(item => <button key={item} className={range === item ? 'primary' : 'ghost'} onClick={() => setRange(item)}>{item}</button>)}<button className={plan ? 'primary' : 'ghost'} style={{ marginLeft: 12 }} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><span className="subtle" style={{ marginLeft: 'auto' }}>{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} /></div>
+    </div></div><aside className="panel scroll indicator-controls" style={{ padding: 18 }}>{plan && <PositionPlanner plan={plan} ticker={detail.ticker} name={detail.name} kind={detail.kind} onChange={savePlan} onReset={() => savePlan(freshPlan())} onClose={() => savePlan(null)} />}<div className="toolbar" style={{ marginBottom: showParams ? 14 : 24 }}><div className="section-title" style={{ margin: 0 }}>PARAMETERS</div><button className="ghost" style={{ marginLeft: 'auto', padding: '3px 9px', minHeight: 24, fontSize: 11 }} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>
     {showParams && <>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('ma')} onChange={() => toggle('ma')} />이동평균</label><div className="parameter-inputs">{config.maPeriods.map((period, index) => <input key={index} aria-label={`이동평균 기간 ${index + 1}`} type="number" min="1" value={period} onChange={event => setConfig(current => ({ ...current, maPeriods: current.maPeriods.map((value, position) => position === index ? Number(event.target.value) : value) }))} />)}</div></div>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('rsi')} onChange={() => toggle('rsi')} />RSI</label><input aria-label="RSI 기간" type="number" min="1" value={config.rsiPeriod} onChange={event => setConfig(current => ({ ...current, rsiPeriod: Number(event.target.value) }))} /></div>

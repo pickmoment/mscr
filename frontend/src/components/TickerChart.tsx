@@ -2,10 +2,22 @@ import { useEffect, useRef, useState } from 'react';
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart, type MouseEventParams, type Time } from 'lightweight-charts';
 import { BarsResponse, ChartBar } from '../lib/api';
 import { won } from '../lib/format';
+import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
 
-export default function TickerChart({ data, light }: { data: BarsResponse | null; light: boolean }) {
+type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void };
+
+export default function TickerChart({ data, light, plan, kind, onPlanChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [legend, setLegend] = useState<ChartBar | null>(null);
+  // 차트는 data·light에만 반응해 다시 만든다. 드래그 중 매 프레임 바뀌는 계획 값은 ref로 읽어 재생성을 피한다.
+  const planRef = useRef(plan);
+  planRef.current = plan;
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
+  const changeRef = useRef(onPlanChange);
+  changeRef.current = onPlanChange;
+  const zonesRef = useRef<PositionZones | null>(null);
+  useEffect(() => { zonesRef.current?.update(); }, [plan]);
   useEffect(() => {
     if (!ref.current || !data || !data.bars.length) return;
     const chart = createChart(ref.current, { autoSize: true, layout: { background: { type: ColorType.Solid, color: light ? '#ffffff' : '#10151d' }, textColor: light ? '#5f6b7a' : '#8290a4', fontFamily: "'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", fontSize: 12, attributionLogo: true }, grid: { vertLines: { color: light ? '#e8edf3' : '#1d2632' }, horzLines: { color: light ? '#e8edf3' : '#1d2632' } }, crosshair: { mode: CrosshairMode.Normal }, localization: { locale: 'ko-KR', dateFormat: 'yyyy-MM-dd' } });
@@ -33,9 +45,50 @@ export default function TickerChart({ data, light }: { data: BarsResponse | null
       const signal = pane.addSeries(LineSeries, { priceScaleId: 'right', color: '#f5c451' });
       signal.setData(data.macd.signal || []);
     }
+    const container = ref.current;
+    const zones = new PositionZones(() => planRef.current, light);
+    candles.attachPrimitive(zones);
+    zonesRef.current = zones;
+    let dragging: PositionLevel | null = null;
+    const paneY = (event: MouseEvent) => event.clientY - container.getBoundingClientRect().top;
+    const onDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      const level = zones.levelAt(paneY(event));
+      if (!level) return;
+      dragging = level;
+      zones.setDragging(level);
+      // 드래그 중에는 차트가 같은 포인터로 스크롤·확대되지 않게 막는다.
+      chart.applyOptions({ handleScroll: false, handleScale: false });
+      event.preventDefault();
+    };
+    const onMove = (event: MouseEvent) => {
+      const current = planRef.current;
+      if (!dragging || !current) return;
+      const price = candles.coordinateToPrice(paneY(event));
+      if (price === null) return;
+      changeRef.current({ ...current, [dragging]: alignTick(price, kindRef.current) });
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = null;
+      zones.setDragging(null);
+      chart.applyOptions({ handleScroll: true, handleScale: true });
+    };
+    container.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
     const onCrosshair = (param: MouseEventParams<Time>) => { if (typeof param.time !== 'string') return; const point = data.bars.find(bar => bar.time === param.time); setLegend(point || null); };
     chart.subscribeCrosshairMove(onCrosshair);
-    return () => { chart.unsubscribeCrosshairMove(onCrosshair); chart.remove(); setLegend(null); };
+    return () => {
+      container.removeEventListener('mousedown', onDown);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      chart.unsubscribeCrosshairMove(onCrosshair);
+      zonesRef.current = null;
+      chart.remove();
+      setLegend(null);
+    };
   }, [data, light]);
-  return <div style={{ height: '100%', position: 'relative' }}><div className="mono subtle" style={{ position: 'absolute', zIndex: 2, top: 8, left: 12 }}>{legend ? `${legend.time}  O ${won(legend.open)}  H ${won(legend.high)}  L ${won(legend.low)}  C ${won(legend.close)}  V ${legend.volume.toLocaleString()}` : '크로스헤어를 움직여 OHLCV 확인'}</div><div ref={ref} style={{ width: '100%', height: '100%' }} /></div>;
+  // 부모(.chart-box)의 높이가 내용에 따라 늘어나므로 height:100%는 확정 높이가 없어 무너진다. 절대 배치로 홀더를 그대로 채운다.
+  return <div style={{ position: 'absolute', inset: 0 }}><div className="mono subtle" style={{ position: 'absolute', zIndex: 2, top: 8, left: 12 }}>{legend ? `${legend.time}  O ${won(legend.open)}  H ${won(legend.high)}  L ${won(legend.low)}  C ${won(legend.close)}  V ${legend.volume.toLocaleString()}` : '크로스헤어를 움직여 OHLCV 확인'}</div><div ref={ref} style={{ width: '100%', height: '100%' }} /></div>;
 }

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, BrokerOrder, PlanCandidate, PlanEvaluation, PlanProposal, TradePlan, TradingStatus } from '../lib/api';
+import { positionFromTradePlan, storePositionPlan } from '../lib/position';
+import { SelectTicker } from '../lib/nav';
 import { won } from '../lib/format';
 
 type Draft = { id: number | null; name: string; ticker: string; side: 'buy' | 'sell'; quantity: string; order_type: 'limit' | 'market'; limit_price: string; entry_price: string; stop_price: string; tp1_price: string; tp1_ratio: string; tp2_price: string; tp2_ratio: string; tp3_trailing_pct: string; enabled: boolean; note: string };
@@ -33,7 +35,7 @@ const candidateColumns: { label: string; title?: string; num?: boolean }[] = [
   { label: '트레일링', num: true },
 ];
 
-export default function TradingPanel() {
+export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
   const [status, setStatus] = useState<TradingStatus | null>(null);
   const [plans, setPlans] = useState<TradePlan[]>([]);
   const [evaluations, setEvaluations] = useState<PlanEvaluation[]>([]);
@@ -50,6 +52,8 @@ export default function TradingPanel() {
   const loadStatus = () => api.tradingStatus().then(setStatus).catch(() => setStatus({ enabled: false, env: null, account_masked: null, source: null, reason: '브로커 상태를 확인할 수 없습니다.', active_env: 'paper', accounts: { paper: null, real: null } }));
   useEffect(() => { loadStatus(); loadPlans(); loadOrders(); }, []);
   useEffect(() => { window.addEventListener('mscr-settings-changed', loadStatus); return () => window.removeEventListener('mscr-settings-changed', loadStatus); }, []);
+  // 종목 상세 차트에서 계획을 저장하면 이 탭은 다시 마운트되지 않으므로 이벤트로 목록을 새로 읽는다.
+  useEffect(() => { const reload = () => loadPlans(); window.addEventListener('mscr-plans-changed', reload); return () => window.removeEventListener('mscr-plans-changed', reload); }, []);
   const evaluationOf = useMemo(() => new Map(evaluations.map(item => [item.plan_id, item])), [evaluations]);
   const armed = useMemo(() => { const active = new Set(plans.filter(plan => plan.enabled).map(plan => plan.id)); return evaluations.filter(item => item.triggered && item.next_leg !== null && active.has(item.plan_id)); }, [plans, evaluations]);
   const pickedCandidate: PlanCandidate | undefined = proposal && picked !== null ? proposal.candidates[picked] : undefined;
@@ -114,6 +118,11 @@ export default function TradingPanel() {
   const remove = async (plan: TradePlan) => {
     if (!window.confirm(`계획 "${plan.name}"을 삭제합니다. 계속할까요?`)) return;
     try { await api.deleteTradePlan(plan.id); if (form.id === plan.id) setForm(emptyForm); setMessage(`계획 "${plan.name}"을 삭제했습니다.`); loadPlans(); } catch (error) { fail(error, '계획 삭제 실패'); }
+  };
+  // 계획의 가격을 그대로 차트 블록으로 넘긴다. 이동 대상 목록은 계획 목록의 종목들이라 ◀▶로 계획 사이를 오갈 수 있다.
+  const showOnChart = (plan: TradePlan) => {
+    storePositionPlan(plan.ticker, positionFromTradePlan(plan));
+    onSelect(plan.ticker, plans.map(item => item.ticker));
   };
 
   const summarize = (rows: BrokerOrder[]) => {
@@ -269,7 +278,7 @@ export default function TradingPanel() {
             <span className="subtle">{evaluation?.as_of || '기준일 없음'} · 종가 {won(evaluation?.close ?? null)}</span>
           </div>
           {plan.note && <div className="subtle">{plan.note}</div>}
-          <div className="toolbar"><button className="ghost" onClick={() => edit(plan)}>편집</button><button className="danger" onClick={() => remove(plan)}>삭제</button></div>
+          <div className="toolbar"><button className="ghost" onClick={() => showOnChart(plan)} title="계획의 가격을 종목 상세 차트에 블록으로 띄웁니다">차트에서 보기</button><button className="ghost" onClick={() => edit(plan)}>편집</button><button className="danger" onClick={() => remove(plan)}>삭제</button></div>
         </article>;
       })}
       {!plans.length && <div className="empty">등록된 트레이딩 계획이 없습니다.</div>}

@@ -42,7 +42,7 @@ export default function App() {
       <section style={{ display: tab === 'stats' ? 'block' : 'none', height: '100%' }}><MarketStatsPanel onSelect={selectTicker} /></section>
       <section style={{ display: tab === 'live' ? 'block' : 'none', height: '100%' }}><MarketLivePanel onSelect={selectTicker} /></section>
       <section style={{ display: tab === 'portfolio' ? 'block' : 'none', height: '100%' }}><PortfolioPanel key={tradesVersion} onSelect={selectTicker} /></section>
-      <section style={{ display: tab === 'trading' ? 'block' : 'none', height: '100%' }}><TradingPanel /></section>
+      <section style={{ display: tab === 'trading' ? 'block' : 'none', height: '100%' }}><TradingPanel onSelect={selectTicker} /></section>
       <section style={{ display: tab === 'indicators' ? 'block' : 'none', height: '100%' }}><IndicatorManager /></section>
       <section style={{ display: tab === 'settings' ? 'block' : 'none', height: '100%' }}><SettingsPanel /></section>
     </main>
