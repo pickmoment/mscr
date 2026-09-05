@@ -100,3 +100,25 @@ class IngestRunRequest(BaseModel):
     days: int = Field(default=400, gt=0, le=3650)
     force: bool = False
     source: Literal["krx", "fdr", "alphasquare"] = "krx"
+
+
+class WatchlistRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+class WatchlistItemRequest(BaseModel):
+    watchlist_id: int | None = None
+    ticker: str = Field(pattern=r"^\d{6}$")
+    memo: str | None = Field(default=None, max_length=500)
+    target_price: float | None = Field(default=None, gt=0)
+
+
+class WatchlistBulkRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    tickers: list[str] = Field(min_length=1, max_length=2000)
+
+
+class WatchlistItemsActionRequest(BaseModel):
+    action: Literal["delete", "move", "copy"]
+    tickers: list[str] = Field(min_length=1, max_length=2000)
+    target_id: int | None = None

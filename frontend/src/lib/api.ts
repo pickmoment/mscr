@@ -58,6 +58,12 @@ export type MarketLiveOverview = {
   issues: LiveIssueRow[];
   errors: Record<string, string>;
 };
+export type Watchlist = { id: number; name: string; created_at: string; updated_at: string; item_count: number; contains: boolean };
+export type WatchlistRow = { ticker: string; name: string; kind: string | null; market: string | null; delisted: boolean; memo: string | null; target_price: number | null; added_price: number | null; added_at: string; as_of: string | null; close: number | null; volume: number | null; value: number | null; halted: boolean; change_pct: number | null; target_gap_pct: number | null; since_added_pct: number | null; market_cap: number | null; per: number | null; pbr: number | null; stale: boolean };
+export type WatchlistSummary = { count: number; up: number; down: number; flat: number; avg_change_pct: number | null; reached_target: number; stale: boolean };
+export type WatchlistDetail = { id: number; name: string; updated_at: string; as_of: string | null; rows: WatchlistRow[]; summary: WatchlistSummary };
+export type WatchlistItemPayload = { watchlist_id?: number | null; ticker: string; memo?: string | null; target_price?: number | null };
+export type WatchlistItemsAction = { action: 'delete' | 'move' | 'copy'; tickers: string[]; target_id?: number | null };
 const detailMessage = (detail: unknown, status: number): string => {
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail) && detail.length) return detail.map((item: { loc?: (string | number)[]; msg?: string }) => `${(item.loc || []).filter(part => part !== 'body').join('.') || '요청'}: ${item.msg || '잘못된 값'}`).join(' / ');
@@ -135,4 +141,13 @@ export const api = {
   marketStats: (date: string) => request<MarketStats>(`/api/market-stats?date=${date}`),
   marketLive: () => request<MarketLiveOverview>('/api/market-live'),
   themeStocks: (themeId: number) => request<{ stocks: LiveThemeStock[] }>(`/api/market-live/themes/${themeId}/stocks`),
+  watchlists: (ticker?: string) => request<Watchlist[]>(`/api/watchlists${ticker ? `?ticker=${ticker}` : ''}`),
+  createWatchlist: (name: string) => request<Watchlist>('/api/watchlists', { method: 'POST', body: JSON.stringify({ name }) }),
+  createWatchlistFromTickers: (name: string, tickers: string[]) => request<{ id: number; name: string; added: number; skipped: string[] }>('/api/watchlists/bulk', { method: 'POST', body: JSON.stringify({ name, tickers }) }),
+  renameWatchlist: (id: number, name: string) => request<{ id: number; name: string; updated_at: string }>(`/api/watchlists/${id}`, { method: 'PUT', body: JSON.stringify({ name }) }),
+  deleteWatchlist: (id: number) => request<void>(`/api/watchlists/${id}`, { method: 'DELETE' }),
+  watchlistItems: (id: number) => request<WatchlistDetail>(`/api/watchlists/${id}/items`),
+  saveWatchlistItem: (payload: WatchlistItemPayload) => request<{ watchlist_id: number; ticker: string }>('/api/watchlists/items', { method: 'POST', body: JSON.stringify(payload) }),
+  watchlistItemsAction: (id: number, payload: WatchlistItemsAction) => request<{ affected: number; skipped: string[] }>(`/api/watchlists/${id}/items/actions`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteWatchlistItem: (id: number, ticker: string) => request<void>(`/api/watchlists/${id}/items/${ticker}`, { method: 'DELETE' }),
 };

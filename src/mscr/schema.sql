@@ -68,6 +68,24 @@ CREATE TABLE IF NOT EXISTS screens (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS watchlists (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS watchlist_items (
+  watchlist_id INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+  ticker TEXT NOT NULL,
+  memo TEXT,
+  target_price REAL,
+  added_price REAL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (watchlist_id, ticker)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_watchlist_items_ticker ON watchlist_items(ticker);
+
 CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticker TEXT NOT NULL,

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { api, LiveFeaturedRow, LiveFeaturedSection, LiveIndustryRow, LiveIssueRow, LiveMarketStat, LiveNewsRow, LiveThemeRow, LiveThemeStock, LiveTrendingRow, MarketLiveOverview } from '../lib/api';
 import { compactVolume, won } from '../lib/format';
+import { SelectTicker } from '../lib/nav';
 
 const fmtPct2 = (value: number | null | undefined) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 const changeClass = (value: number | null | undefined) => value == null ? '' : value > 0 ? 'change-up' : value < 0 ? 'change-down' : '';
@@ -25,14 +26,15 @@ function BreadthCard({ label, data }: { label: string; data: LiveMarketStat | un
   </div>;
 }
 
-function TrendingTable({ rows, onSelect }: { rows: LiveTrendingRow[]; onSelect: (ticker: string) => void }) {
+function TrendingTable({ rows, onSelect }: { rows: LiveTrendingRow[]; onSelect: SelectTicker }) {
+  const tickers = rows.map(row => row.code);
   return <div className="panel" style={{ padding: 14, minWidth: 0 }}>
     <div className="section-title" style={{ margin: '0 0 10px' }}>인기 종목 <span className="badge">{rows.length}</span></div>
     <div className="rank-scroll">
       <table className="metric-table rank-table">
         <thead><tr><td>#</td><td>종목</td><td>시장</td><td>조회수</td></tr></thead>
         <tbody>
-          {rows.map((row, idx) => <tr key={row.code} className="rank-row" onClick={() => onSelect(row.code)}>
+          {rows.map((row, idx) => <tr key={row.code} className="rank-row" onClick={() => onSelect(row.code, tickers)}>
             <td className="mono">{idx + 1}</td>
             <td>{row.name}<span className="subtle mono"> {row.code}</span></td>
             <td className="subtle">{row.market || '—'}</td>
@@ -47,7 +49,7 @@ function TrendingTable({ rows, onSelect }: { rows: LiveTrendingRow[]; onSelect: 
 
 type ThemeStocksState = 'loading' | 'error' | LiveThemeStock[];
 
-function ThemeTable({ rows, onSelect }: { rows: LiveThemeRow[]; onSelect: (ticker: string) => void }) {
+function ThemeTable({ rows, onSelect }: { rows: LiveThemeRow[]; onSelect: SelectTicker }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [stocksByTheme, setStocksByTheme] = useState<Record<number, ThemeStocksState>>({});
 
@@ -81,7 +83,7 @@ function ThemeTable({ rows, onSelect }: { rows: LiveThemeRow[]; onSelect: (ticke
                 {row.theme_id != null && stocksByTheme[row.theme_id] === 'loading' && <span className="subtle">종목 불러오는 중…</span>}
                 {row.theme_id != null && stocksByTheme[row.theme_id] === 'error' && <span className="subtle">종목을 불러오지 못했습니다.</span>}
                 {row.theme_id != null && Array.isArray(stocksByTheme[row.theme_id]) && <div className="theme-stock-chips">
-                  {(stocksByTheme[row.theme_id] as LiveThemeStock[]).map(stock => <button type="button" key={stock.code} className="theme-stock-chip" onClick={() => onSelect(stock.code)}>{stock.name}<span className="subtle mono"> {stock.code}</span></button>)}
+                  {(stocksByTheme[row.theme_id] as LiveThemeStock[]).map(stock => <button type="button" key={stock.code} className="theme-stock-chip" onClick={() => onSelect(stock.code, (stocksByTheme[row.theme_id as number] as LiveThemeStock[]).map(item => item.code))}>{stock.name}<span className="subtle mono"> {stock.code}</span></button>)}
                   {(stocksByTheme[row.theme_id] as LiveThemeStock[]).length === 0 && <span className="subtle">종목 없음</span>}
                 </div>}
               </td>
@@ -94,14 +96,15 @@ function ThemeTable({ rows, onSelect }: { rows: LiveThemeRow[]; onSelect: (ticke
   </div>;
 }
 
-function FeaturedTable({ factor, section, onSelect, valueLabel, valueOf }: { factor: string; section: LiveFeaturedSection; onSelect: (ticker: string) => void; valueLabel: string; valueOf: (row: LiveFeaturedRow) => string }) {
+function FeaturedTable({ factor, section, onSelect, valueLabel, valueOf }: { factor: string; section: LiveFeaturedSection; onSelect: SelectTicker; valueLabel: string; valueOf: (row: LiveFeaturedRow) => string }) {
+  const tickers = section.rows.map(row => row.code);
   return <div className="panel" style={{ padding: 14, minWidth: 0 }}>
     <div className="section-title" style={{ margin: '0 0 10px' }}>{section.label}{section.error && <span className="subtle"> · 조회 실패</span>}</div>
     <div className="rank-scroll">
       <table className="metric-table rank-table">
         <thead><tr><td>종목</td><td>종가</td><td>등락률</td><td>{valueLabel}</td></tr></thead>
         <tbody>
-          {section.rows.map(row => <tr key={`${factor}-${row.code}`} className="rank-row" onClick={() => onSelect(row.code)}>
+          {section.rows.map(row => <tr key={`${factor}-${row.code}`} className="rank-row" onClick={() => onSelect(row.code, tickers)}>
             <td>{row.name}<span className="subtle mono"> {row.code}</span></td>
             <td className="mono">{won(row.close)}</td>
             <td className={`mono ${changeClass(row.returns)}`}>{fmtPct2(row.returns)}</td>
@@ -114,7 +117,7 @@ function FeaturedTable({ factor, section, onSelect, valueLabel, valueOf }: { fac
   </div>;
 }
 
-function IndustryTable({ rows, onSelect }: { rows: LiveIndustryRow[]; onSelect: (ticker: string) => void }) {
+function IndustryTable({ rows, onSelect }: { rows: LiveIndustryRow[]; onSelect: SelectTicker }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const toggle = (industry: string) => setExpanded(current => current === industry ? null : industry);
 
@@ -135,7 +138,7 @@ function IndustryTable({ rows, onSelect }: { rows: LiveIndustryRow[]; onSelect: 
             {expanded === row.industry && <tr>
               <td colSpan={5} style={{ paddingTop: 0, paddingBottom: 10 }}>
                 <div className="theme-stock-chips">
-                  {row.stocks.map(stock => <button type="button" key={stock.code} className={`theme-stock-chip ${changeClass(stock.returns)}`} onClick={() => onSelect(stock.code)}>{stock.name || stock.code}<span className="subtle mono"> {stock.code}</span> {fmtPct2(stock.returns)}</button>)}
+                  {row.stocks.map(stock => <button type="button" key={stock.code} className={`theme-stock-chip ${changeClass(stock.returns)}`} onClick={() => onSelect(stock.code, row.stocks.map(item => item.code))}>{stock.name || stock.code}<span className="subtle mono"> {stock.code}</span> {fmtPct2(stock.returns)}</button>)}
                   {!row.stocks.length && <span className="subtle">종목 없음</span>}
                 </div>
               </td>
@@ -161,7 +164,7 @@ function LinkList({ title, rows }: { title: string; rows: (LiveNewsRow | LiveIss
   </div>;
 }
 
-export default function MarketLivePanel({ onSelect }: { onSelect: (ticker: string) => void }) {
+export default function MarketLivePanel({ onSelect }: { onSelect: SelectTicker }) {
   const [overview, setOverview] = useState<MarketLiveOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');

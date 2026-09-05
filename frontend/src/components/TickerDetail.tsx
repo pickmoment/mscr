@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { api, BarsResponse, ChartIndicatorParams, Instrument } from '../lib/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, BarsResponse, ChartIndicatorParams, Instrument, Watchlist } from '../lib/api';
 import TickerChart from './TickerChart';
 import { ratio, won } from '../lib/format';
+import { SelectTicker } from '../lib/nav';
 
 const defaultConfig: ChartIndicatorParams = { maPeriods: [5, 20, 60], rsiPeriod: 14, macdFast: 12, macdSlow: 26, macdSignal: 9, bbPeriod: 20, bbK: 2, volumeMaPeriod: 50 };
 const defaultEnabled = ['ma', 'rsi', 'macd', 'bb', 'volume_ma'];
@@ -16,16 +17,46 @@ const loadChartSettings = (): ChartSettings => {
   }
 };
 
-export default function TickerDetail({ ticker, tickers, onSelect, light }: { ticker: string | null; tickers: string[]; onSelect: (ticker: string) => void; light: boolean }) {
+export default function TickerDetail({ ticker, tickers, onSelect, light }: { ticker: string | null; tickers: string[]; onSelect: SelectTicker; light: boolean }) {
   const [detail, setDetail] = useState<Instrument | null>(null);
   const [chart, setChart] = useState<BarsResponse | null>(null);
   const [range, setRange] = useState(() => loadChartSettings().range);
   const [enabled, setEnabled] = useState(() => loadChartSettings().enabled);
   const [config, setConfig] = useState(() => loadChartSettings().config);
   const [showParams, setShowParams] = useState(() => loadChartSettings().showParams);
+  const [lists, setLists] = useState<Watchlist[]>([]);
+  const [listId, setListId] = useState<number | null>(null);
+  const [watchMessage, setWatchMessage] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const loadLists = useCallback(() => {
+    if (!ticker) return;
+    api.watchlists(ticker).then(rows => {
+      setLists(rows);
+      setListId(current => current != null && rows.some(row => row.id === current) ? current : rows.find(row => row.contains)?.id ?? rows[0]?.id ?? null);
+    }).catch(() => undefined);
+  }, [ticker]);
   useEffect(() => { if (ticker) api.instrument(ticker).then(setDetail).catch(() => setDetail(null)); }, [ticker]);
   useEffect(() => { if (ticker) api.bars(ticker, range, enabled, config).then(setChart).catch(() => setChart(null)); }, [ticker, range, enabled, config]);
   useEffect(() => { localStorage.setItem(CHART_SETTINGS_KEY, JSON.stringify({ range, enabled, config, showParams })); }, [range, enabled, config, showParams]);
+  useEffect(loadLists, [loadLists]);
+  useEffect(() => { window.addEventListener('mscr-watchlist-changed', loadLists); return () => window.removeEventListener('mscr-watchlist-changed', loadLists); }, [loadLists]);
+  useEffect(() => {
+    const navigate = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      // 다른 탭이 보이는 동안에도 이 컴포넌트는 display:none 으로 남아 있으므로 화면에 떠 있을 때만 반응한다.
+      if (!rootRef.current?.offsetParent) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+      const position = ticker ? tickers.indexOf(ticker) : -1;
+      const next = event.key === 'ArrowLeft' ? position - 1 : position + 1;
+      if (position < 0 || next < 0 || next >= tickers.length) return;
+      event.preventDefault();
+      onSelect(tickers[next], tickers);
+    };
+    window.addEventListener('keydown', navigate);
+    return () => window.removeEventListener('keydown', navigate);
+  }, [ticker, tickers, onSelect]);
   if (!ticker) return <div className="panel empty">스크리너에서 종목을 선택하세요.</div>;
   if (!detail) return <div className="panel empty">종목 정보를 불러오는 중…</div>;
   const toggle = (key: string) => setEnabled(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
@@ -33,13 +64,25 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const index = ticker ? tickers.indexOf(ticker) : -1;
   const hasPrev = index > 0;
   const hasNext = index >= 0 && index < tickers.length - 1;
+  const watched = lists.find(list => list.id === listId)?.contains ?? false;
+  const toggleWatch = async () => {
+    try {
+      if (watched && listId != null) await api.deleteWatchlistItem(listId, ticker);
+      else await api.saveWatchlistItem({ watchlist_id: listId, ticker });
+      setWatchMessage('');
+      window.dispatchEvent(new Event('mscr-watchlist-changed'));
+    } catch (error) {
+      setWatchMessage(error instanceof Error ? error.message : '관심종목을 바꿀 수 없습니다.');
+    }
+  };
 
-  return <div className="detail-grid"><div className="scroll">
+  return <div className="detail-grid" ref={rootRef}><div className="scroll">
     <div className="panel" style={{ padding: '10px 16px', marginBottom: 10 }}>
       <div className="toolbar" style={{ gap: 14 }}>
         <div className="toolbar" style={{ gap: 4 }}>
-          <button className="ghost" style={{ padding: '4px 10px', minHeight: 28 }} disabled={!hasPrev} onClick={() => hasPrev && onSelect(tickers[index - 1])} aria-label="이전 종목" title={hasPrev ? `이전: ${tickers[index - 1]}` : undefined}>◀</button>
-          <button className="ghost" style={{ padding: '4px 10px', minHeight: 28 }} disabled={!hasNext} onClick={() => hasNext && onSelect(tickers[index + 1])} aria-label="다음 종목" title={hasNext ? `다음: ${tickers[index + 1]}` : undefined}>▶</button>
+          <button className="ghost" style={{ padding: '4px 10px', minHeight: 28 }} disabled={!hasPrev} onClick={() => hasPrev && onSelect(tickers[index - 1], tickers)} aria-label="이전 종목 (←)" title={hasPrev ? `이전: ${tickers[index - 1]} (←)` : '목록의 첫 종목입니다'}>◀</button>
+          {tickers.length > 1 && <span className="subtle mono" style={{ fontSize: 11 }} title="← → 키로 이동">{index >= 0 ? index + 1 : '—'}/{tickers.length}</span>}
+          <button className="ghost" style={{ padding: '4px 10px', minHeight: 28 }} disabled={!hasNext} onClick={() => hasNext && onSelect(tickers[index + 1], tickers)} aria-label="다음 종목 (→)" title={hasNext ? `다음: ${tickers[index + 1]} (→)` : '목록의 마지막 종목입니다'}>▶</button>
         </div>
         <div>
           <div className="section-title" style={{ margin: 0, marginBottom: 2 }}>{detail.kind.toUpperCase()} · {detail.market || detail.category || 'ETF'}</div>
@@ -50,7 +93,12 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
         <span className="subtle mono">거래대금 {won(detail.quote.value as number)}</span>
         <span className="subtle mono">RSI({config.rsiPeriod}) {ratio(latestRsi)}</span>
         <span className="subtle mono" title="최근 3·6·9·12개월 누적수익률 가중평균(0.4/0.2/0.2/0.2)">가중수익률 {detail.quote.weighted_return == null ? '—' : `${Number(detail.quote.weighted_return).toFixed(1)}%`}</span>
-        <span className="badge" style={{ marginLeft: 'auto' }}>{detail.as_of || '—'} 기준</span>
+        <div className="toolbar" style={{ gap: 6, margin: 0, marginLeft: 'auto' }}>
+          {watchMessage && <span className="subtle">{watchMessage}</span>}
+          {lists.length > 1 && <select value={listId ?? ''} aria-label="관심목록 선택" onChange={event => setListId(Number(event.target.value))}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</select>}
+          <button className={watched ? 'primary' : 'ghost'} onClick={toggleWatch} title={watched ? '관심목록에서 빼기' : '관심목록에 담기'}>{watched ? '★ 관심' : '☆ 관심'}</button>
+          <span className="badge">{detail.as_of || '—'} 기준</span>
+        </div>
       </div>
     </div>
     <div className="panel chart-box"><div className="toolbar" style={{ marginBottom: 8 }}>{['3m','6m','1y','3y','max'].map(item => <button key={item} className={range === item ? 'primary' : 'ghost'} onClick={() => setRange(item)}>{item}</button>)}<span className="subtle" style={{ marginLeft: 'auto' }}>{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div><div style={{ height: 500 }}><TickerChart data={chart} light={light} /></div></div></div><aside className="panel scroll indicator-controls" style={{ padding: 18 }}><div className="toolbar" style={{ marginBottom: showParams ? 14 : 24 }}><div className="section-title" style={{ margin: 0 }}>PARAMETERS</div><button className="ghost" style={{ marginLeft: 'auto', padding: '3px 9px', minHeight: 24, fontSize: 11 }} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>

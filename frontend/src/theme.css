@@ -241,3 +241,28 @@ button,input,select{font-family:inherit;font-size:13px;line-height:1.35}
 .theme-stock-chip.change-down{color:#6e9ff5}
 [data-theme='light'] .theme-stock-chip{background:#f1f5f9;border-color:#dce3eb;color:#1b2532}
 [data-theme='light'] .theme-stock-chip:hover{background:#e2e8f0}
+.watchlist-layout{display:grid;grid-template-columns:minmax(280px,340px) 1fr;gap:18px;height:100%}
+.watchlist-main{display:grid;grid-template-rows:auto minmax(0,1fr);gap:14px;min-width:0;height:100%}
+.watchlist-main .table-panel{overflow:auto}
+.watchlist-groups{display:flex;flex-direction:column;gap:6px}
+.watchlist-group{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:9px 12px;border-radius:8px;border:1px solid #202936;background:#10151d;color:#dbe4ef;font-size:13px;text-align:left}
+.watchlist-group:hover{background:#151c26}
+.watchlist-group.active{border-color:#e94e4e;background:#1a1216;color:#f4f7fb}
+.watchlist-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}
+.watchlist-table td{padding:7px 10px;border-bottom:1px solid #202936;text-align:left}
+.watchlist-table thead td{position:sticky;top:0;z-index:1;background:#10151d;color:#7b899d}
+.watchlist-table td:first-child{width:28px;padding-right:0}
+.watchlist-table td:nth-child(2){white-space:normal;min-width:130px}
+.watchlist-table td:nth-child(n+3):nth-child(-n+8){text-align:right}
+.watchlist-table td:nth-child(7) .cell-input{max-width:100px}
+.watchlist-table td:nth-last-child(2){min-width:150px}
+.watchlist-table tr.selected td{background:#161e2a}
+.cell-input{width:100%;min-width:84px;background:#0e131a;border:1px solid #202936;border-radius:6px;color:#dbe4ef;padding:5px 8px;font-size:12px}
+.cell-input:focus{outline:none;border-color:#3a4757}
+[data-theme='light'] .watchlist-group{background:#f8fafc;border-color:#dce3eb;color:#1b2532}
+[data-theme='light'] .watchlist-table td{border-color:#e2e8f0}
+[data-theme='light'] .watchlist-group:hover{background:#eef2f7}
+[data-theme='light'] .watchlist-group.active{background:#fdeaec;border-color:#e94e4e;color:#1b2532}
+[data-theme='light'] .watchlist-table thead td{background:#fff}
+[data-theme='light'] .cell-input{background:#f8fafc;border-color:#cbd5e1;color:#243244}
+[data-theme='light'] .watchlist-table tr.selected td{background:#eef2f7}

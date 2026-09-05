@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, MarketBreadth, MarketRankRow, MarketStats } from '../lib/api';
 import { compactVolume, ratio, won } from '../lib/format';
+import { SelectTicker } from '../lib/nav';
 
 const changeClass = (value: number | null | undefined) => value == null ? '' : value > 0 ? 'change-up' : value < 0 ? 'change-down' : '';
 const fmtPct2 = (value: number | null | undefined) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -20,14 +21,15 @@ function BreadthCard({ label, data }: { label: string; data: MarketBreadth }) {
   </div>;
 }
 
-function RankTable({ title, rows, onSelect, valueLabel, valueOf }: { title: string; rows: MarketRankRow[]; onSelect: (ticker: string) => void; valueLabel: string; valueOf: (row: MarketRankRow) => string }) {
+function RankTable({ title, rows, onSelect, valueLabel, valueOf }: { title: string; rows: MarketRankRow[]; onSelect: SelectTicker; valueLabel: string; valueOf: (row: MarketRankRow) => string }) {
+  const tickers = rows.map(row => row.ticker);
   return <div className="panel" style={{ padding: 14, minWidth: 0 }}>
     <div className="section-title" style={{ margin: '0 0 10px' }}>{title} <span className="badge">{rows.length}</span></div>
     <div className="rank-scroll">
       <table className="metric-table rank-table">
         <thead><tr><td>종목</td><td>종가</td><td>등락률</td><td>{valueLabel}</td></tr></thead>
         <tbody>
-          {rows.map(row => <tr key={row.ticker} className="rank-row" onClick={() => onSelect(row.ticker)}>
+          {rows.map(row => <tr key={row.ticker} className="rank-row" onClick={() => onSelect(row.ticker, tickers)}>
             <td>{row.name}<span className="subtle mono"> {row.ticker}</span></td>
             <td className="mono">{won(row.close)}</td>
             <td className={`mono ${changeClass(row.change_pct)}`}>{fmtPct2(row.change_pct)}</td>
@@ -40,7 +42,7 @@ function RankTable({ title, rows, onSelect, valueLabel, valueOf }: { title: stri
   </div>;
 }
 
-export default function MarketStatsPanel({ onSelect }: { onSelect: (ticker: string) => void }) {
+export default function MarketStatsPanel({ onSelect }: { onSelect: SelectTicker }) {
   const [dates, setDates] = useState<string[]>([]);
   const [date, setDate] = useState('');
   const [stats, setStats] = useState<MarketStats | null>(null);

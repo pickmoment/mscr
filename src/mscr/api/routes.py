@@ -16,6 +16,7 @@ from ..db import db_session
 from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_NAMES, custom_definitions, formula_calls, ticker_snapshot, truncate_price_jump, validate_formula
 from ..indicators import bollinger_bands, macd, rsi, sma
 from .. import market_stats
+from .. import watchlist
 from ..portfolio import replay_trades, snapshot, validate_trade
 from ..config import DB_PATH, MSCR_HOME, SCHEMA_VERSION, request_delay, request_delay_source
 from ..credentials import load as load_settings
@@ -26,7 +27,7 @@ from ..providers.krx import KRXProvider, _stock, clear_krx_credentials, krx_stat
 from ..screener import FIELDS, run
 from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, sync_orders
 from ..autoplan import propose as propose_plan
-from .models import ActiveEnvRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, ScreenRequest, ScreenSaveRequest, TradePlanRequest, TradeRequest, TradeRunRequest
+from .models import ActiveEnvRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, ScreenRequest, ScreenSaveRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
 
 router = APIRouter(prefix="/api")
 
@@ -365,6 +366,91 @@ def get_market_live_theme_stocks(theme_id: int):
         return {"stocks": theme_stocks(theme_id)}
     except Exception as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+def _watchlist_error(exc: ValueError) -> HTTPException:
+    message = str(exc)
+    if "같은 이름" in message: return HTTPException(409, message)
+    if "찾을 수 없습니다" in message: return HTTPException(404, message)
+    return HTTPException(422, message)
+
+
+@router.get("/watchlists")
+def watchlists(ticker: str | None = Query(None)):
+    try:
+        return watchlist.list_watchlists(ticker)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.post("/watchlists", status_code=201)
+def create_watchlist(request: WatchlistRequest):
+    try:
+        return watchlist.create_watchlist(request.name)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.post("/watchlists/bulk", status_code=201)
+def create_watchlist_from_tickers(request: WatchlistBulkRequest):
+    try:
+        return watchlist.create_from_tickers(request.name, request.tickers)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.put("/watchlists/{watchlist_id}")
+def rename_watchlist(watchlist_id: int, request: WatchlistRequest):
+    try:
+        return watchlist.rename_watchlist(watchlist_id, request.name)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.delete("/watchlists/{watchlist_id}", status_code=204)
+def delete_watchlist(watchlist_id: int):
+    try:
+        watchlist.delete_watchlist(watchlist_id)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+    return Response(status_code=204)
+
+
+@router.get("/watchlists/{watchlist_id}/items")
+def watchlist_items(watchlist_id: int):
+    try:
+        return watchlist.snapshot(watchlist_id)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.post("/watchlists/items", status_code=201)
+def save_watchlist_item(request: WatchlistItemRequest):
+    try:
+        return watchlist.save_item(request.watchlist_id, request.ticker, request.memo, request.target_price)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.post("/watchlists/{watchlist_id}/items/actions")
+def act_on_watchlist_items(watchlist_id: int, request: WatchlistItemsActionRequest):
+    try:
+        if request.action == "delete":
+            return watchlist.delete_items(watchlist_id, request.tickers)
+        if request.target_id is None:
+            raise ValueError("대상 목록을 선택하세요")
+        return watchlist.transfer_items(watchlist_id, request.target_id, request.tickers, keep_source=request.action == "copy")
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+
+
+@router.delete("/watchlists/{watchlist_id}/items/{ticker}", status_code=204)
+def delete_watchlist_item(watchlist_id: int, ticker: str):
+    try:
+        watchlist.delete_item(watchlist_id, ticker)
+    except ValueError as exc:
+        raise _watchlist_error(exc) from exc
+    return Response(status_code=204)
 
 
 @router.get("/portfolio")
