@@ -15,10 +15,10 @@ export type TradingStatus = { enabled: boolean; env: string | null; account_mask
 export type BrokerCredential = { app_key: string; app_secret: string; account: string; env: 'paper' | 'real' };
 export type TradePlanPhase = 'waiting_entry' | 'holding' | 'tp1_done' | 'trailing' | 'closed';
 export type TradePlanLeg = 'entry' | 'stop' | 'tp1' | 'tp2' | 'trailing';
-export type TradePlan = { id: number; name: string; ticker: string; side: 'buy' | 'sell'; quantity: number; order_type: 'limit' | 'market'; limit_price: number | null; entry_price: number; stop_price: number; tp1_price: number; tp1_ratio: number; tp2_price: number; tp2_ratio: number; tp3_trailing_pct: number; enabled: boolean; note: string | null; updated_at: string };
+export type TradePlan = { id: number; name: string; ticker: string; side: 'buy' | 'sell'; quantity: number; order_type: 'limit' | 'market'; limit_price: number | null; entry_price: number; stop_price: number; tp1_price: number; tp1_ratio: number; tp2_price: number; tp2_ratio: number; tp3_trailing_pct: number; enabled: boolean; setup: string | null; note: string | null; updated_at: string };
 export type PlanProposalRequest = { ticker: string; side: 'buy' | 'sell'; entry_price: number; max_investment: number; max_loss: number };
 export type PlanCandidate = { stop_atr_multiple: number; stop_distance: number; stop_price: number; rejected: string | null; quantity: number; invested?: number; max_loss_krw?: number; loss_budget_used?: number; leg_quantities?: number[]; tp1_price?: number; tp1_ratio?: number; tp2_price?: number; tp2_ratio?: number; tp3_trailing_pct?: number; reach_tp1_prob?: number; reach_tp2_prob?: number; baseline_expectancy_r?: number; breakeven_tp1_prob?: number };
-export type PlanProposal = { ticker: string; name: string; side: 'buy' | 'sell'; entry_price: number; as_of: string | null; reference_close: number | null; atr: number; atr_pct: number; max_investment: number; max_loss: number; binding: 'max_loss' | 'max_investment'; sample: { observations: number; horizon_days: number }; candidates: PlanCandidate[]; recommended: number; recommendation_reason: string; warnings: string[]; plan: Omit<TradePlan, 'id' | 'name' | 'note' | 'updated_at'> };
+export type PlanProposal = { ticker: string; name: string; side: 'buy' | 'sell'; entry_price: number; as_of: string | null; reference_close: number | null; atr: number; atr_pct: number; max_investment: number; max_loss: number; binding: 'max_loss' | 'max_investment'; sample: { observations: number; horizon_days: number }; candidates: PlanCandidate[]; recommended: number; recommendation_reason: string; warnings: string[]; risk_budget: RiskBudget; plan: Omit<TradePlan, 'id' | 'name' | 'note' | 'setup' | 'updated_at'> };
 export type PlanEvaluation = { plan_id: number; name: string; ticker: string; side: string; phase: TradePlanPhase; next_leg: TradePlanLeg | null; triggered: boolean; reason: string; as_of: string | null; close: number | null; order_side: 'buy' | 'sell' | null; order_quantity: number | null };
 export type BrokerOrder = { id: number | null; plan_id: number | null; plan_name: string | null; leg: TradePlanLeg | null; as_of: string | null; ticker: string; side: string; quantity: number; order_type: string; limit_price: number | null; status: string; env: string; broker_order_id: string | null; filled_quantity: number; filled_price: number | null; fee: number; tax: number; trade_id: number | null; message: string | null; requested_at: string; updated_at: string };
 export type AppSettings = { mscr_home: string; db_path: string; schema_version: number; credential_paths: { krx: string; kis: string }; request_delay_sec: number; request_delay_source: 'default' | 'env' | 'file'; krx: { mode: 'openapi' | 'idpw' | 'anonymous'; source: 'env' | 'file' | null; openapi_key_masked: string | null; krx_id_masked: string | null; stored: string[] }; kis: TradingStatus; ingest_defaults: { days: number; force: boolean; source: 'krx' | 'fdr' | 'alphasquare' }; data: { as_of: string | null; bars_rows: number; instrument_count: { stock: number; etf: number }; last_ingest_at: string | null } };
@@ -64,6 +64,32 @@ export type WatchlistSummary = { count: number; up: number; down: number; flat: 
 export type WatchlistDetail = { id: number; name: string; updated_at: string; as_of: string | null; rows: WatchlistRow[]; summary: WatchlistSummary };
 export type WatchlistItemPayload = { watchlist_id?: number | null; ticker: string; memo?: string | null; target_price?: number | null };
 export type WatchlistItemsAction = { action: 'delete' | 'move' | 'copy'; tickers: string[]; target_id?: number | null };
+
+export type JobStatus = { running: boolean; started_at?: string; finished_at?: string | null; processed?: number; total?: number | null; current?: string | null; ok?: boolean | null; error?: string | null; days?: number; force?: boolean; result?: { screens: number; dates: number; rows: number; skipped: number } | null };
+export type SignalRow = { ticker: string; name: string | null; market: string | null; rank: number; score: number | null; close: number | null; streak_days?: number | null };
+export type SignalStreak = { days: number; first_date: string; truncated: boolean };
+export type SignalDiff = { screen_id: number; date: string | null; previous: string | null; entered: SignalRow[]; held: SignalRow[]; exited: SignalRow[]; streaks: Record<string, SignalStreak> };
+export type SignalCoverageRow = { id: number; name: string; days: number; first_date: string | null; last_date: string | null; signals: number };
+export type SignalCoverage = { screens: SignalCoverageRow[]; trading_days: number };
+export type SignalHistoryRow = { date: string; screen_id: number; name: string; rank: number };
+export type RiskLimits = { risk_per_trade_pct: number; max_portfolio_heat_pct: number };
+export type RiskBudget = { per_trade_krw: number; heat_limit_krw: number; remaining_krw: number; suggested_max_loss: number | null };
+export type RiskPlanRow = { plan_id: number; name: string; ticker: string; side: string; setup: string | null; phase: string; enabled: boolean; entry_price: number; stop_price: number; close: number | null; state: 'open' | 'pending' | 'closed' | 'disabled'; quantity: number; risk_krw: number; initial_risk_krw: number; risk_pct: number | null };
+export type RiskUnprotected = { ticker: string; name: string; quantity: number; market_value: number; weight: number };
+export type RiskHeat = { as_of: string | null; equity: number; cash_krw: number; market_value: number; limits: RiskLimits; open_risk_krw: number; pending_risk_krw: number; total_risk_krw: number; heat_pct: number | null; open_heat_pct: number | null; budget: RiskBudget; over_limit: boolean; plans: RiskPlanRow[]; unprotected: RiskUnprotected[]; warnings: string[] };
+export type BriefScreenRow = { ticker: string; name: string | null; market: string | null; rank: number; score: number | null; close: number | null; change_pct: number | null; streak_days: number | null };
+export type BriefScreen = { screen_id: number; name: string; date: string | null; previous: string | null; baseline: boolean; matched: number; entered: BriefScreenRow[]; exited: BriefScreenRow[]; held: number; streak_leaders: BriefScreenRow[]; stale: boolean };
+export type BriefPlan = { plan_id: number; name: string; ticker: string; ticker_name: string | null; side: string; setup: string | null; phase: string; triggered: boolean; reason: string; close: number | null; entry_price: number; stop_price: number; distance_pct: number | null; stop_distance_pct: number | null; near: boolean };
+export type BriefWatchItem = { watchlist_id: number; watchlist: string; ticker: string; name: string | null; close: number | null; target_price: number | null; target_gap_pct: number | null };
+export type BriefPosition = { ticker: string; name: string; quantity: number; avg_cost: number; last_close: number | null; unrealized_pct: number | null; weight_pct: number; plan_name: string | null; stop_price: number | null; stop_distance_pct: number | null; unprotected: boolean };
+export type BriefData = { as_of: string | null; previous: string | null; screens: BriefScreen[]; plans: BriefPlan[]; watchlist: { lists: number; items: number; reached: BriefWatchItem[] }; positions: BriefPosition[]; heat: { heat_pct: number | null; total_risk_krw: number; open_risk_krw: number; pending_risk_krw: number; over_limit: boolean; remaining_krw: number; limits: RiskLimits }; warnings: string[] };
+export type ReviewExit = { leg: string; date: string | null; quantity: number; price: number; slippage_pct: number | null; realized_krw: number; realized_r: number | null };
+export type ReviewPlanResult = { plan_id: number; name: string; ticker: string; ticker_name: string | null; side: string; setup: string | null; status: 'open' | 'closed'; planned_entry: number; entry_price: number; entry_quantity: number; entry_date: string | null; entry_slippage_pct: number | null; stop_price: number; r_unit: number; exits: ReviewExit[]; realized_krw: number; realized_r: number | null; open_quantity: number; open_r: number | null; total_r: number | null; mae_r: number | null; mfe_r: number | null; days_held: number | null; exit_date: string | null };
+export type ReviewGroup = { setup?: string; month?: string; trades: number; win_rate: number | null; avg_r: number | null; total_r: number | null };
+export type ReviewStats = { trades: number; wins: number; losses: number; win_rate: number | null; avg_r: number | null; total_r: number | null; expectancy_r: number | null; profit_factor: number | null; avg_win_r: number | null; avg_loss_r: number | null; max_consecutive_losses: number; max_drawdown_r: number | null; avg_days_held: number | null; avg_entry_slippage_pct: number | null; equity_curve: { date: string; cumulative_r: number }[]; by_setup: ReviewGroup[]; by_month: ReviewGroup[]; open: { count: number; total_open_r: number | null }; warnings: string[] };
+export type BacktestProtocol = { entry: 'next_open' | 'breakout'; trigger_window: number; trigger_buffer_pct: number; stop_mode: 'atr' | 'box'; atr_multiple: number; atr_period: number; box_lookback: number; box_buffer_atr: number; target_r: number; horizon_days: number; cost_pct: number; top_n: number | null; non_overlap: boolean };
+export type BacktestResult = { screen_id: number; name: string; protocol: BacktestProtocol; period: { start: string | null; end: string | null; days: number }; signals: number; triggered: number; trades: number; trigger_rate: number | null; expectancy_r: number | null; stderr_r: number | null; win_rate: number | null; target_rate: number | null; stop_rate: number | null; timeout_rate: number | null; avg_days_held: number | null; avg_risk_pct: number | null; by_month: { month: string; trades: number; expectancy_r: number | null }[]; by_half: { label: string; trades: number; expectancy_r: number | null }[]; profitable_months: number; total_months: number; warnings: string[] };
+export type ForwardReturns = { screen_id: number; name: string; signals: number; horizons: { days: number; count: number; mean_pct: number | null; median_pct: number | null; win_rate: number | null; p10_pct: number | null; p90_pct: number | null }[]; warnings: string[] };
 const detailMessage = (detail: unknown, status: number): string => {
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail) && detail.length) return detail.map((item: { loc?: (string | number)[]; msg?: string }) => `${(item.loc || []).filter(part => part !== 'body').join('.') || '요청'}: ${item.msg || '잘못된 값'}`).join(' / ');
@@ -72,6 +98,8 @@ const detailMessage = (detail: unknown, status: number): string => {
 const REQUEST_TIMEOUT_MS = 15000;
 // 전 유니버스 동적 계산은 조건에 따라 수십 초가 걸릴 수 있어 스크린 요청만 별도의 긴 상한을 쓴다.
 const SCREEN_TIMEOUT_MS = 300000;
+// 검증은 신호 로그를 읽어 시뮬레이션만 돌리지만 신호가 수만 건이면 몇 초가 걸린다.
+const BACKTEST_TIMEOUT_MS = 60000;
 type RequestOptions = { timeoutMs?: number; signal?: AbortSignal };
 const request = async <T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> => {
   const controller = new AbortController();
@@ -150,4 +178,16 @@ export const api = {
   saveWatchlistItem: (payload: WatchlistItemPayload) => request<{ watchlist_id: number; ticker: string }>('/api/watchlists/items', { method: 'POST', body: JSON.stringify(payload) }),
   watchlistItemsAction: (id: number, payload: WatchlistItemsAction) => request<{ affected: number; skipped: string[] }>(`/api/watchlists/${id}/items/actions`, { method: 'POST', body: JSON.stringify(payload) }),
   deleteWatchlistItem: (id: number, ticker: string) => request<void>(`/api/watchlists/${id}/items/${ticker}`, { method: 'DELETE' }),
+  brief: (date?: string) => request<BriefData>(`/api/brief${date ? `?date=${date}` : ''}`),
+  signalCoverage: () => request<SignalCoverage>('/api/signals/coverage'),
+  signalStatus: () => request<JobStatus>('/api/signals/status'),
+  captureSignals: (payload: { days: number; force: boolean; screen_ids?: number[] }) => request<JobStatus>('/api/signals/capture', { method: 'POST', body: JSON.stringify(payload) }),
+  signalDiff: (screenId: number, date?: string) => request<SignalDiff>(`/api/signals/diff?screen_id=${screenId}${date ? `&date=${date}` : ''}`),
+  signalHistory: (ticker: string) => request<SignalHistoryRow[]>(`/api/signals/history/${ticker}`),
+  riskHeat: () => request<RiskHeat>('/api/risk/heat'),
+  saveRiskLimits: (payload: RiskLimits) => request<RiskHeat>('/api/risk/limits', { method: 'PUT', body: JSON.stringify(payload) }),
+  reviewPlans: () => request<ReviewPlanResult[]>('/api/review/plans'),
+  reviewStats: () => request<ReviewStats>('/api/review/stats'),
+  backtest: (screen_id: number, protocol: BacktestProtocol) => request<BacktestResult>('/api/backtest', { method: 'POST', body: JSON.stringify({ screen_id, protocol }) }, { timeoutMs: BACKTEST_TIMEOUT_MS }),
+  forwardReturns: (screenId: number, topN?: number) => request<ForwardReturns>(`/api/backtest/forward?screen_id=${screenId}${topN ? `&top_n=${topN}` : ''}`, undefined, { timeoutMs: BACKTEST_TIMEOUT_MS }),
 };

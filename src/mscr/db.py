@@ -25,6 +25,7 @@ ADDED_COLUMNS = {
         "tp2_price": "REAL NOT NULL DEFAULT 0",
         "tp2_ratio": "REAL NOT NULL DEFAULT 0",
         "tp3_trailing_pct": "REAL NOT NULL DEFAULT 0",
+        "setup": "TEXT",
     },
     "broker_orders": {"leg": "TEXT", "as_of": "TEXT"},
 }

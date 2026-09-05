@@ -9,7 +9,7 @@ import pandas as pd
 import os
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from .. import ingest_job
+from .. import backtest, brief, ingest_job, jobs, review, risk, signals
 from ..broker.kis import CREDENTIAL_PATH as kis_credential_path
 from ..broker.kis import KISError, broker_from_config, broker_status, clear_credentials, save_credentials, set_active_env
 from ..db import db_session
@@ -27,7 +27,7 @@ from ..providers.krx import KRXProvider, _stock, clear_krx_credentials, krx_stat
 from ..screener import FIELDS, run
 from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, sync_orders
 from ..autoplan import propose as propose_plan
-from .models import ActiveEnvRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, ScreenRequest, ScreenSaveRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
+from .models import ActiveEnvRequest, BacktestRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, RiskLimitRequest, ScreenRequest, ScreenSaveRequest, SignalCaptureRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
 
 router = APIRouter(prefix="/api")
 
@@ -113,7 +113,8 @@ def get_ingest_status():
 @router.post("/ingest/run")
 def post_ingest_run(request: IngestRunRequest):
     save_settings("settings", load_settings("settings") | {"ingest_days": request.days, "ingest_force": request.force, "ingest_source": request.source})
-    return ingest_job.start(request.days, request.force, request.source)
+    # 수집이 끝나면 새 거래일에 대한 신호 로그를 이어서 채운다(브리핑·프리셋 diff가 이 로그를 읽는다).
+    return ingest_job.start(request.days, request.force, request.source, then=lambda: signals.start_job(days=1))
 
 
 @router.post("/screen")
@@ -546,9 +547,15 @@ def save_trading_plan(request: TradePlanRequest):
 @router.post("/trading/plans/propose")
 def propose_trading_plan(request: PlanProposalRequest):
     try:
-        return propose_plan(request.ticker, request.side, request.entry_price, request.max_investment, request.max_loss)
+        proposal = propose_plan(request.ticker, request.side, request.entry_price, request.max_investment, request.max_loss)
     except ValueError as exc:
         raise _trading_error(exc) from exc
+    # 계획 1건의 손실 한도만으로는 계획 여러 개가 동시에 열렸을 때의 합산 손실을 알 수 없다.
+    budget = risk.heat()["budget"]
+    warnings = list(proposal["warnings"])
+    if budget["remaining_krw"] is not None and request.max_loss > budget["remaining_krw"]:
+        warnings.append(f"포트폴리오 히트 한도까지 남은 리스크는 {budget['remaining_krw']:,.0f}원입니다 — 이 계획의 최대 손실 금액({request.max_loss:,.0f}원)이 그보다 큽니다")
+    return proposal | {"warnings": warnings, "risk_budget": budget}
 
 @router.delete("/trading/plans/{plan_id}", status_code=204)
 def delete_trading_plan(plan_id: int):
@@ -588,3 +595,82 @@ def trading_sync():
 @router.get("/trading/orders")
 def trading_orders(limit: int = Query(200, ge=1, le=2000)):
     return list_orders(limit=limit)
+
+
+@router.get("/signals/coverage")
+def signals_coverage():
+    return {"screens": signals.coverage(), "trading_days": len(signals.trading_days())}
+
+
+@router.get("/signals/status")
+def signals_status():
+    return jobs.status(signals.JOB_NAME)
+
+
+@router.post("/signals/capture")
+def signals_capture(request: SignalCaptureRequest):
+    """저장된 프리셋을 최근 N거래일에 대해 실행해 신호 로그를 채운다. 전 유니버스를 날짜마다 다시
+    계산하므로 백그라운드 작업으로 돌리고 진행률만 폴링한다."""
+    return signals.start_job(screen_ids=request.screen_ids, days=request.days, force=request.force)
+
+
+@router.get("/signals/diff")
+def signals_diff(screen_id: int = Query(...), date: str | None = Query(None)):
+    result = signals.diff(screen_id, date)
+    if result["date"] is None:
+        return result | {"streaks": {}}
+    streaks = signals.streaks(screen_id, result["date"])
+    for key in ("entered", "held"):
+        for row in result[key]:
+            row["streak_days"] = streaks.get(row["ticker"], {}).get("days")
+    return result | {"streaks": streaks}
+
+
+@router.get("/signals/history/{ticker}")
+def signals_history(ticker: str, limit: int = Query(50, ge=1, le=500)):
+    return signals.signal_history(ticker, limit)
+
+
+@router.get("/brief")
+def daily_brief(date: str | None = Query(None)):
+    return brief.build(date)
+
+
+@router.get("/risk/heat")
+def risk_heat():
+    return risk.heat()
+
+
+@router.put("/risk/limits")
+def risk_limits(request: RiskLimitRequest):
+    try:
+        risk.save_limits(request.risk_per_trade_pct, request.max_portfolio_heat_pct)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return risk.heat()
+
+
+@router.get("/review/plans")
+def review_plans():
+    return review.plan_results()
+
+
+@router.get("/review/stats")
+def review_stats():
+    return review.stats()
+
+
+@router.post("/backtest")
+def run_backtest(request: BacktestRequest):
+    try:
+        return backtest.run(request.screen_id, request.protocol.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/backtest/forward")
+def backtest_forward(screen_id: int = Query(...), top_n: int | None = Query(5, ge=1, le=500)):
+    try:
+        return backtest.forward_returns(screen_id, top_n=top_n)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc

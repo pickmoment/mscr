@@ -90,19 +90,20 @@ def save_plan(plan: dict[str, Any], path=None) -> int:
 
     enabled = int(bool(plan.get("enabled", True)))
     note = plan.get("note") or None
+    setup = (str(plan.get("setup")).strip() or None) if plan.get("setup") is not None else None
     plan_id = int(plan["id"]) if plan.get("id") else None
     now = _now()
-    values = (name, ticker, side, quantity, order_type, limit_price, entry_price, stop_price, tp1_price, tp1_ratio, tp2_price, tp2_ratio, tp3_trailing_pct, enabled, note)
+    values = (name, ticker, side, quantity, order_type, limit_price, entry_price, stop_price, tp1_price, tp1_ratio, tp2_price, tp2_ratio, tp3_trailing_pct, enabled, setup, note)
     with db_session(path) as db:
         if not db.execute("SELECT 1 FROM instruments WHERE ticker=?", (ticker,)).fetchone(): raise ValueError("등록되지 않은 종목코드입니다")
         clash = db.execute("SELECT id FROM trade_plans WHERE name=?", (name,)).fetchone()
         if clash and clash[0] != plan_id: raise ValueError("같은 이름의 계획이 있습니다")
         if plan_id is None:
             return int(db.execute(
-                "INSERT INTO trade_plans(name,ticker,side,quantity,order_type,limit_price,entry_price,stop_price,tp1_price,tp1_ratio,tp2_price,tp2_ratio,tp3_trailing_pct,enabled,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO trade_plans(name,ticker,side,quantity,order_type,limit_price,entry_price,stop_price,tp1_price,tp1_ratio,tp2_price,tp2_ratio,tp3_trailing_pct,enabled,setup,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values + (now, now)).lastrowid)
         if not db.execute(
-            "UPDATE trade_plans SET name=?,ticker=?,side=?,quantity=?,order_type=?,limit_price=?,entry_price=?,stop_price=?,tp1_price=?,tp1_ratio=?,tp2_price=?,tp2_ratio=?,tp3_trailing_pct=?,enabled=?,note=?,updated_at=? WHERE id=?",
+            "UPDATE trade_plans SET name=?,ticker=?,side=?,quantity=?,order_type=?,limit_price=?,entry_price=?,stop_price=?,tp1_price=?,tp1_ratio=?,tp2_price=?,tp2_ratio=?,tp3_trailing_pct=?,enabled=?,setup=?,note=?,updated_at=? WHERE id=?",
             values + (now, plan_id)).rowcount: raise ValueError("계획을 찾을 수 없습니다")
         return plan_id
 
@@ -216,6 +217,34 @@ def evaluate_plans(plan_ids: list[int] | None = None, path=None) -> list[dict[st
                 evaluation = {**evaluation, "triggered": False, "reason": "비활성 계획"}
             output.append({"plan_id": plan["id"], "name": plan["name"], "ticker": plan["ticker"], "side": plan["side"], **evaluation})
         return output
+
+
+def plan_exposure(path=None) -> list[dict[str, Any]]:
+    """계획별 체결 진행 상태와 아직 시장에 남아 있는 수량. 리스크 집계(risk)와 결산(review)이
+    단계 판정을 각자 다시 구현하지 않도록 한 곳에서 계산한다. 모의 실행은 주문을 저장하지 않으므로
+    여기 들어오는 레그는 모두 실제 시도다."""
+    output: list[dict[str, Any]] = []
+    with db_session(path) as db:
+        plans = [_plan(row) for row in db.execute("SELECT * FROM trade_plans ORDER BY name").fetchall()]
+        legs_by_plan = _plan_legs(db, [plan["id"] for plan in plans])
+        for plan in plans:
+            legs = legs_by_plan.get(plan["id"], {})
+            done = {leg: info["status"] in ACTIVE_LEG_STATUSES for leg, info in legs.items()}
+            quantity = float(plan["quantity"])
+            tp1_qty, tp2_qty, _ = _leg_quantities(quantity, plan["tp1_ratio"], plan["tp2_ratio"])
+            entered = done.get("entry", False)
+            closed = done.get("stop", False) or done.get("trailing", False)
+            remaining = 0.0 if closed or not entered else quantity - (tp1_qty if done.get("tp1") else 0.0) - (tp2_qty if done.get("tp2") else 0.0)
+            phase = "closed" if closed or (entered and remaining <= 0) else "waiting_entry" if not entered else "trailing" if done.get("tp2") else "tp1_done" if done.get("tp1") else "holding"
+            bar = _latest_bar(db, plan["ticker"])
+            entry_leg = legs.get("entry", {})
+            output.append({
+                **plan, "plan_id": plan["id"], "phase": phase, "entered": entered, "closed": phase == "closed",
+                "remaining_quantity": max(0.0, remaining), "close": float(bar["close"]) if bar else None, "as_of": bar["date"] if bar else None,
+                "entry_fill_price": entry_leg.get("filled_price"), "entry_date": entry_leg.get("as_of"),
+                "legs": {leg: {"status": info["status"], "as_of": info["as_of"], "filled_quantity": info["filled_quantity"], "filled_price": info["filled_price"], "fee": info["fee"], "tax": info["tax"], "requested_at": info["requested_at"]} for leg, info in legs.items()},
+            })
+    return output
 
 
 def run_plans(broker=None, dry_run: bool = True, plan_ids: list[int] | None = None, path=None) -> list[dict[str, Any]]:

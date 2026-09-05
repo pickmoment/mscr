@@ -10,14 +10,15 @@ import SettingsPanel from './components/SettingsPanel';
 import MarketStatsPanel from './components/MarketStatsPanel';
 import MarketLivePanel from './components/MarketLivePanel';
 import WatchlistPanel from './components/WatchlistPanel';
+import BriefPanel from './components/BriefPanel';
 import { SelectTicker } from './lib/nav';
 
 type Theme = 'dark' | 'light';
-type TabKey = 'screener' | 'detail' | 'watchlist' | 'stats' | 'live' | 'portfolio' | 'trading' | 'indicators' | 'settings';
+type TabKey = 'brief' | 'screener' | 'detail' | 'watchlist' | 'stats' | 'live' | 'portfolio' | 'trading' | 'indicators' | 'settings';
 
 // 좌측은 탐색, 우측 묶음은 운용, 꼬리는 도구. 그룹 경계에만 구분선을 넣는다.
 const groups: { key: 'explore' | 'operate' | 'tools'; tabs: { key: TabKey; label: string }[] }[] = [
-  { key: 'explore', tabs: [{ key: 'screener', label: '스크리너' }, { key: 'detail', label: '종목 상세' }, { key: 'stats', label: '시장 통계' }, { key: 'live', label: '현재 시황' }] },
+  { key: 'explore', tabs: [{ key: 'brief', label: '브리핑' }, { key: 'screener', label: '스크리너' }, { key: 'detail', label: '종목 상세' }, { key: 'stats', label: '시장 통계' }, { key: 'live', label: '현재 시황' }] },
   { key: 'operate', tabs: [{ key: 'watchlist', label: '관심종목' }, { key: 'portfolio', label: '포트폴리오' }, { key: 'trading', label: '트레이딩' }] },
   { key: 'tools', tabs: [{ key: 'indicators', label: '지표 관리' }, { key: 'settings', label: '설정' }] },
 ];
@@ -33,7 +34,7 @@ const SunIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none
 const MoonIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.5 14.2A8.6 8.6 0 0 1 9.8 3.5a8.6 8.6 0 1 0 10.7 10.7Z" /></svg>;
 
 export default function App() {
-  const [tab, setTab] = useState<TabKey>('screener');
+  const [tab, setTab] = useState<TabKey>('brief');
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [siblings, setSiblings] = useState<string[]>([]);
   const [rows, setRows] = useState<ScreenRow[]>([]);
@@ -117,7 +118,8 @@ export default function App() {
     </nav>
 
     <main className="content">
-      {panel('screener', <div className="split"><ScreenerPanel onResults={setRows} /><ScreenerGrid rows={rows} onSelect={selectTicker} light={theme === 'light'} /></div>)}
+      {panel('brief', <BriefPanel onSelect={selectTicker} onOpenTab={setTab} />)}
+      {panel('screener', <div className="split"><ScreenerPanel onResults={setRows} onSelect={selectTicker} /><ScreenerGrid rows={rows} onSelect={selectTicker} light={theme === 'light'} /></div>)}
       {panel('detail', <TickerDetail ticker={selectedTicker} tickers={siblings} onSelect={selectTicker} light={theme === 'light'} />)}
       {panel('watchlist', <WatchlistPanel onSelect={selectTicker} />)}
       {panel('stats', <MarketStatsPanel onSelect={selectTicker} />)}

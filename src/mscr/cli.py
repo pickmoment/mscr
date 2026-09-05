@@ -56,14 +56,19 @@ def ingest(
     days: int = typer.Option(400),
     force: bool = typer.Option(False),
     source: str = typer.Option("krx", help="krx(기본), fdr(전종목 스냅샷 대체, 주식만 지원) 또는 alphasquare(로컬 유니버스 종목별 개별 조회, 최후 폴백, --days 그대로 적용)"),
+    capture: bool = typer.Option(True, help="수집 후 저장된 프리셋의 최신 거래일 신호를 로그에 남깁니다."),
 ) -> None:
     """Ingest KRX daily snapshots; indicators are calculated on demand."""
     from .ingest import run_ingest
+    from .signals import capture as capture_signals
     try:
         run_ingest(days=days, force=force, source=source)
     except (RuntimeError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    if capture:
+        result = capture_signals(offsets=[0])
+        typer.echo(f"signals: {result['dates']}일 수집, 신호 {result['rows']}건 (건너뜀 {result['skipped']})")
 
 
 @app.command("krx-latest")
@@ -246,6 +251,117 @@ def trade_sync() -> None:
     typer.echo(f"synced: {len(orders)}")
     for order in orders:
         typer.echo(f"  #{order.get('id')} {order['ticker']} {order['side']} status={order['status']} filled={order.get('filled_quantity') or 0:g}@{order.get('filled_price') or 0:g} fee={order.get('fee') or 0:g} tax={order.get('tax') or 0:g} trade_id={order.get('trade_id') or '-'}")
+
+
+@app.command()
+def brief(date: str = typer.Option(None, "--date", help="기준 거래일 (기본: 최신 수집일)")) -> None:
+    """Print the end-of-day briefing: preset signal changes, plan triggers, watchlist targets, position risk."""
+    from .brief import build, render
+    typer.echo(render(build(date)))
+
+
+signals_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Saved-preset signal log used by the briefing, preset diff and backtest.")
+app.add_typer(signals_app, name="signals")
+
+
+@signals_app.command("capture")
+def signals_capture(
+    days: int = typer.Option(1, "--days", min=1, max=1000, help="최신 거래일부터 거슬러 올라갈 거래일 수."),
+    force: bool = typer.Option(False, "--force", help="이미 수집한 날짜도 다시 계산합니다."),
+    screen: list[int] = typer.Option(None, "--screen", help="프리셋 id로 제한합니다."),
+) -> None:
+    """Run saved presets over past trading days and store which tickers matched."""
+    from .signals import capture
+    result = capture(screen_ids=list(screen) or None, offsets=range(days), force=force,
+                     on_progress=lambda done, total, label: typer.echo(f"  [{done}/{total}] {label}"))
+    typer.echo(f"captured: 프리셋 {result['screens']}개 · {result['dates']}일 · 신호 {result['rows']}건 (건너뜀 {result['skipped']})")
+
+
+@signals_app.command("coverage")
+def signals_coverage() -> None:
+    """Show how many trading days of signal log each preset has."""
+    from .signals import coverage, trading_days
+    days = len(trading_days())
+    typer.echo(f"trading days in db: {days}")
+    for row in coverage():
+        typer.echo(f"  #{row['id']} {row['name']}: {row['days']}일 ({row['first_date'] or '-'} ~ {row['last_date'] or '-'}) 신호 {row['signals']}건")
+
+
+@app.command("risk")
+def risk_command(
+    per_trade: float = typer.Option(None, "--per-trade", help="1건 리스크 한도(총자산 대비 %)."),
+    max_heat: float = typer.Option(None, "--max-heat", help="포트폴리오 히트 한도(총자산 대비 %)."),
+) -> None:
+    """Show portfolio heat: how much of total assets every open and pending plan can lose."""
+    from .risk import heat, save_limits
+    if per_trade is not None or max_heat is not None:
+        current = heat()["limits"]
+        try:
+            save_limits(per_trade if per_trade is not None else current["risk_per_trade_pct"],
+                        max_heat if max_heat is not None else current["max_portfolio_heat_pct"])
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+    state = heat()
+    limits = state["limits"]
+    typer.echo(f"equity: {state['equity']:,.0f}원 (현금 {state['cash_krw']:,.0f} + 평가액 {state['market_value']:,.0f})")
+    heat_pct = "-" if state["heat_pct"] is None else f"{state['heat_pct']:.2f}%"
+    typer.echo(f"heat: {heat_pct} / 한도 {limits['max_portfolio_heat_pct']:g}% · 위험 {state['total_risk_krw']:,.0f}원 (진행 {state['open_risk_krw']:,.0f} + 대기 {state['pending_risk_krw']:,.0f})")
+    typer.echo(f"budget: 1건 한도 {state['budget']['per_trade_krw']:,.0f}원 · 남은 여유 {state['budget']['remaining_krw']:,.0f}원")
+    for row in state["plans"]:
+        if row["state"] in ("closed", "disabled"): continue
+        typer.echo(f"  {row['name']} {row['ticker']} {row['state']} {row['quantity']:g}주 위험 {row['risk_krw']:,.0f}원")
+    for row in state["unprotected"]:
+        typer.echo(f"  [손절 없음] {row['ticker']} {row['name']} 평가액 {row['market_value']:,.0f}원")
+    for message in state["warnings"]:
+        typer.echo(f"  ! {message}")
+
+
+def _r(value) -> str:
+    return "—" if value is None else f"{value:+.2f}R"
+
+
+def _percent(value) -> str:
+    return "—" if value is None else f"{value:.1f}%"
+
+
+@app.command("review")
+def review_command(limit: int = typer.Option(20, "--limit", min=1, max=200)) -> None:
+    """Settle finished plans in R and show setup-level statistics."""
+    from .review import plan_results, stats
+    summary = stats()
+    typer.echo(f"closed: {summary['trades']}건 · 승률 {_percent(summary['win_rate'])} · 기대 {_r(summary['expectancy_r'])} · 합계 {_r(summary['total_r'])} · 진행 {summary['open']['count']}건")
+    for row in summary["by_setup"]:
+        typer.echo(f"  [{row['setup']}] {row['trades']}건 승률 {_percent(row['win_rate'])} 평균 {_r(row['avg_r'])} 합계 {_r(row['total_r'])}")
+    for row in plan_results()[:limit]:
+        typer.echo(f"  {row['entry_date'] or '-'} {row['ticker']} {row['ticker_name']} {row['status']} 실현 {_r(row['realized_r'])} 미실현 {_r(row['open_r'])} MAE {_r(row['mae_r'])} MFE {_r(row['mfe_r'])}")
+    for message in summary["warnings"]:
+        typer.echo(f"  ! {message}")
+
+
+@app.command("backtest")
+def backtest_command(
+    screen_id: int = typer.Argument(..., help="프리셋 id (mscr signals coverage로 확인)."),
+    entry: str = typer.Option("next_open", "--entry", help="next_open 또는 breakout."),
+    stop_mode: str = typer.Option("atr", "--stop-mode", help="atr 또는 box."),
+    atr_multiple: float = typer.Option(2.0, "--atr-multiple"),
+    target_r: float = typer.Option(3.0, "--target-r"),
+    horizon: int = typer.Option(60, "--horizon"),
+    top_n: int = typer.Option(5, "--top-n"),
+) -> None:
+    """Replay a preset's signal log under an explicit exit protocol."""
+    from .backtest import run
+    try:
+        result = run(screen_id, {"entry": entry, "stop_mode": stop_mode, "atr_multiple": atr_multiple, "target_r": target_r, "horizon_days": horizon, "top_n": top_n})
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{result['name']}: 신호 {result['signals']}건 → 거래 {result['trades']}건 ({result['period']['start']} ~ {result['period']['end']})")
+    typer.echo(f"기대값 {result['expectancy_r']}R ±{result['stderr_r']} · 목표도달 {result['target_rate']}% · 손절 {result['stop_rate']}% · 흑자월 {result['profitable_months']}/{result['total_months']}")
+    for row in result["by_half"]:
+        typer.echo(f"  {row['label']}: {row['trades']}건 {row['expectancy_r']}R")
+    for message in result["warnings"]:
+        typer.echo(f"  ! {message}")
 
 
 if __name__ == "__main__":

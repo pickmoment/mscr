@@ -4,13 +4,21 @@ import { api } from '../lib/api';
 import { won } from '../lib/format';
 
 type Props = { plan: PositionPlan; ticker: string; name: string; kind: string; onChange: (plan: PositionPlan) => void; onReset: () => void; onClose: () => void };
-type PlanForm = { id: number | null; name: string; orderType: 'limit' | 'market'; tp1Ratio: string; tp2Ratio: string; trailing: string; baseTarget2: number | null };
+type PlanForm = { id: number | null; name: string; orderType: 'limit' | 'market'; tp1Ratio: string; tp2Ratio: string; trailing: string; baseTarget2: number | null; setup: string; setupDate: string | null };
 const levelClass: Record<PositionLevel, string> = { entry: 'level-entry', stop: 'level-stop', target: 'level-target', target2: 'level-target2' };
 type PriceLevel = 'entry' | 'stop' | 'target';
 const editableLevels: PriceLevel[] = ['entry', 'stop', 'target'];
 const rate = (value: number | null) => value == null ? '—' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`;
 const number = (text: string) => { const value = Number(text); return Number.isFinite(value) ? value : 0; };
 const signedWon = (value: number) => `${value >= 0 ? '+' : '-'}${won(Math.abs(value))}`;
+// 신호 로그에서 가져온 셋업 태그는 오래된 것까지 끌어오면 의미가 없다. 최근 10거래일 안의 신호만 쓴다.
+const SETUP_LOOKBACK_DAYS = 10;
+const businessDaysBetween = (from: string, to: string) => {
+  const start = new Date(`${from}T00:00:00`), end = new Date(`${to}T00:00:00`);
+  let days = 0;
+  for (const cursor = new Date(start); cursor < end; cursor.setDate(cursor.getDate() + 1)) { const day = cursor.getDay(); if (day !== 0 && day !== 6) days += 1; }
+  return days;
+};
 
 export default function PositionPlanner({ plan, ticker, name, kind, onChange, onReset, onClose }: Props) {
   const [form, setForm] = useState<PlanForm | null>(null);
@@ -19,14 +27,25 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
   const metrics = positionMetrics(plan);
   // 입력 도중 빈 칸이 되면 Number('')는 0이다. 0은 유효한 가격이 아니므로 그대로 두고 차트가 해당 선을 숨긴다.
   const setPrice = (level: PositionLevel, text: string) => onChange({ ...plan, [level]: Math.max(0, number(text)) });
+  // 신호 로그에 이 종목이 최근 걸렸다면 그 프리셋 이름을 셋업 태그로 미리 채운다. 폼은 즉시 열고 태그만 뒤늦게 붙인다.
+  const prefillSetup = async () => {
+    try {
+      const [history, coverage] = await Promise.all([api.signalHistory(ticker), api.signalCoverage()]);
+      const latest = coverage.screens.reduce<string | null>((acc, row) => row.last_date && (!acc || row.last_date > acc) ? row.last_date : acc, null);
+      const reference = latest || new Date().toISOString().slice(0, 10);
+      const match = history.find(row => row.date <= reference && businessDaysBetween(row.date, reference) <= SETUP_LOOKBACK_DAYS);
+      if (match) setForm(current => current && current.setup ? current : current && { ...current, setup: match.name, setupDate: match.date });
+    } catch { /* 신호 로그가 비어 있으면 태그 없이 진행한다 */ }
+  };
   const openForm = () => {
     // 트레이딩 탭에서 넘어온 계획은 이미 2차 청산선을 갖고 있다. 그 값은 그대로 두고, 없을 때만 1차 거리의 2배로 잡는다.
     onChange({ ...plan, target2: plan.target2 ?? alignTick(plan.entry + 2 * (plan.target - plan.entry), kind) });
     setMessage('');
     const origin = plan.origin;
     setForm(origin
-      ? { id: origin.id, name: origin.name, orderType: origin.orderType, tp1Ratio: String(origin.tp1Ratio), tp2Ratio: String(origin.tp2Ratio), trailing: String(origin.trailing), baseTarget2: plan.target2 }
-      : { id: null, name: `${name} ${new Date().toISOString().slice(0, 10)}`, orderType: 'limit', tp1Ratio: '40', tp2Ratio: '30', trailing: (plan.entry > 0 ? metrics.risk / plan.entry * 100 : 1).toFixed(2), baseTarget2: plan.target2 });
+      ? { id: origin.id, name: origin.name, orderType: origin.orderType, tp1Ratio: String(origin.tp1Ratio), tp2Ratio: String(origin.tp2Ratio), trailing: String(origin.trailing), baseTarget2: plan.target2, setup: origin.setup || '', setupDate: null }
+      : { id: null, name: `${name} ${new Date().toISOString().slice(0, 10)}`, orderType: 'limit', tp1Ratio: '40', tp2Ratio: '30', trailing: (plan.entry > 0 ? metrics.risk / plan.entry * 100 : 1).toFixed(2), baseTarget2: plan.target2, setup: '', setupDate: null });
+    void prefillSetup();
   };
   const closeForm = () => { if (form) onChange({ ...plan, target2: form.baseTarget2 }); setForm(null); };
 
@@ -55,6 +74,7 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
     const label = form.name.trim();
     const note = form.id === null || !plan.origin ? (metrics.rr === null ? '차트에서 작성' : `차트에서 작성 · 손익비 ${metrics.rr.toFixed(2)}R`) : plan.origin.note;
     const enabled = form.id === null || !plan.origin ? true : plan.origin.enabled;
+    const setup = form.setup.trim() || null;
     try {
       const { id } = await api.saveTradePlan({
         ...(form.id === null ? {} : { id: form.id }),
@@ -63,10 +83,10 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
         entry_price: plan.entry, stop_price: plan.stop,
         tp1_price: plan.target, tp1_ratio: tp1Ratio / 100,
         tp2_price: plan.target2, tp2_ratio: tp2Ratio / 100,
-        tp3_trailing_pct: number(form.trailing), enabled, note,
+        tp3_trailing_pct: number(form.trailing), enabled, setup, note,
       });
       // 저장한 계획에 블록을 묶어 둔다. 이어서 선을 고치고 다시 저장하면 같은 계획이 갱신된다.
-      const origin: PositionOrigin = { id, name: label, tp1Ratio, tp2Ratio, trailing: number(form.trailing), orderType: form.orderType, enabled, note };
+      const origin: PositionOrigin = { id, name: label, tp1Ratio, tp2Ratio, trailing: number(form.trailing), orderType: form.orderType, enabled, setup, note };
       onChange({ ...plan, origin });
       setMessage(`계획 "${label}"을 ${form.id === null ? '저장' : '수정'}했습니다. 트레이딩 탭에서 실행합니다.`);
       setForm(null);
@@ -131,6 +151,11 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
       <label className="planner-field"><span className="level-target2">2차 비율</span><input type="number" min="1" max="98" step="1" value={form.tp2Ratio} aria-label="2차 익절 비율" onChange={event => setForm({ ...form, tp2Ratio: event.target.value })} /></label>
       <label className="planner-field"><span>트레일링</span><input type="number" min="0" step="0.1" value={form.trailing} aria-label="트레일링 스탑 비율" onChange={event => setForm({ ...form, trailing: event.target.value })} /></label>
       <label className="planner-field"><span>주문</span><select value={form.orderType} aria-label="주문 유형" onChange={event => setForm({ ...form, orderType: event.target.value as 'limit' | 'market' })}><option value="limit">지정가</option><option value="market">시장가</option></select></label>
+      {/* 셋업 태그는 신호 로그에서 자동으로 붙는다. 아니면 그냥 비워 두고 저장한다. */}
+      {form.setup && <div className="toolbar toolbar--tight">
+        <span className="chip" title="이 종목이 최근 걸린 스크리너 프리셋입니다. 이 계획의 셋업 태그로 저장됩니다.">셋업: {form.setup}{form.setupDate ? ` (${form.setupDate})` : ''}</span>
+        <button className="btn btn--quiet btn--sm" onClick={() => setForm({ ...form, setup: '', setupDate: null })} title="셋업 태그 없이 저장합니다">지우기</button>
+      </div>}
       <div className="planner-readout">
         {blocked && <span className="planner-warning">{blocked}</span>}
       </div>

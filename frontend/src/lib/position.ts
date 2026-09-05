@@ -5,7 +5,8 @@ import type { TradePlan } from './api';
 export type PositionLevel = 'entry' | 'stop' | 'target' | 'target2';
 // target2는 트레이딩 계획(3분할)의 2차 익절가다. 계획 폼을 열 때만 값이 들어가고, 평소에는 null이라 그리지 않는다.
 // origin은 이 블록이 어느 트레이딩 계획에서 왔는지다. 있으면 저장이 새 계획 생성이 아니라 그 계획의 수정이 된다.
-export type PositionOrigin = { id: number; name: string; tp1Ratio: number; tp2Ratio: number; trailing: number; orderType: 'limit' | 'market'; enabled: boolean; note: string | null };
+// setup은 그 계획이 어느 스크리너 프리셋에서 나왔는지의 태그다. 차트에서 수정해도 태그가 지워지지 않도록 함께 왕복시킨다.
+export type PositionOrigin = { id: number; name: string; tp1Ratio: number; tp2Ratio: number; trailing: number; orderType: 'limit' | 'market'; enabled: boolean; setup: string | null; note: string | null };
 export type PositionPlan = { entry: number; stop: number; target: number; target2: number | null; quantity: number; origin: PositionOrigin | null };
 export const positionLevels: PositionLevel[] = ['entry', 'stop', 'target', 'target2'];
 export const levelLabel: Record<PositionLevel, string> = { entry: '진입', stop: '손절', target: '청산', target2: '2차 청산' };
@@ -91,7 +92,7 @@ export const positionOutcome = (plan: PositionPlan, split: PositionSplit): Posit
 /** 트레이딩 계획을 차트 블록으로 되돌린다. 1차·2차 익절가가 각각 청산·2차 청산선이 된다. */
 export const positionFromTradePlan = (plan: TradePlan): PositionPlan => ({
   entry: plan.entry_price, stop: plan.stop_price, target: plan.tp1_price, target2: plan.tp2_price, quantity: plan.quantity,
-  origin: { id: plan.id, name: plan.name, tp1Ratio: plan.tp1_ratio * 100, tp2Ratio: plan.tp2_ratio * 100, trailing: plan.tp3_trailing_pct, orderType: plan.order_type, enabled: plan.enabled, note: plan.note },
+  origin: { id: plan.id, name: plan.name, tp1Ratio: plan.tp1_ratio * 100, tp2Ratio: plan.tp2_ratio * 100, trailing: plan.tp3_trailing_pct, orderType: plan.order_type, enabled: plan.enabled, setup: plan.setup, note: plan.note },
 });
 
 const STORE_KEY = 'mscr-chart-position';

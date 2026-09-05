@@ -61,7 +61,40 @@ class TradePlanRequest(BaseModel):
     tp2_ratio: float = Field(gt=0, lt=1)
     tp3_trailing_pct: float = Field(gt=0)
     enabled: bool = True
+    setup: str | None = Field(default=None, max_length=60)
     note: str | None = None
+
+
+class RiskLimitRequest(BaseModel):
+    risk_per_trade_pct: float = Field(gt=0, le=100)
+    max_portfolio_heat_pct: float = Field(gt=0, le=100)
+
+
+class SignalCaptureRequest(BaseModel):
+    days: int = Field(default=1, ge=1, le=1000)
+    force: bool = False
+    screen_ids: list[int] | None = None
+
+
+class BacktestProtocol(BaseModel):
+    entry: Literal["next_open", "breakout"] = "next_open"
+    trigger_window: int = Field(default=5, ge=1, le=60)
+    trigger_buffer_pct: float = Field(default=0.1, ge=0, le=10)
+    stop_mode: Literal["atr", "box"] = "atr"
+    atr_multiple: float = Field(default=2.0, gt=0, le=10)
+    atr_period: int = Field(default=14, ge=2, le=250)
+    box_lookback: int = Field(default=20, ge=2, le=250)
+    box_buffer_atr: float = Field(default=0.25, ge=0, le=5)
+    target_r: float = Field(default=3.0, gt=0, le=20)
+    horizon_days: int = Field(default=60, ge=1, le=500)
+    cost_pct: float = Field(default=0.25, ge=0, le=5)
+    top_n: int | None = Field(default=5, ge=1, le=500)
+    non_overlap: bool = True
+
+
+class BacktestRequest(BaseModel):
+    screen_id: int
+    protocol: BacktestProtocol = Field(default_factory=BacktestProtocol)
 
 class PlanProposalRequest(BaseModel):
     ticker: str = Field(pattern=r"^\d{6}$")

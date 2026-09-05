@@ -1,48 +1,26 @@
 from __future__ import annotations
 
-import threading
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
-_lock = threading.Lock()
-_state: dict[str, Any] = {"running": False}
+from . import jobs
+
+NAME = "ingest"
 
 
 def status() -> dict[str, Any]:
-    with _lock:
-        return dict(_state)
+    state = jobs.status(NAME)
+    return state | {"current_day": state.get("current")}
 
 
-def start(days: int, force: bool, source: str) -> dict[str, Any]:
-    """이미 실행 중이면 새 작업을 시작하지 않고 현재 상태를 그대로 반환한다."""
-    with _lock:
-        if _state.get("running"):
-            return dict(_state)
-        _state.clear()
-        _state.update({
-            "running": True, "source": source, "days": days, "force": force,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None, "processed": 0, "total": None, "current_day": None,
-            "ok": None, "error": None,
-        })
-        snapshot = dict(_state)
-
-    def _progress(idx: int, total: int, day: str, stock_rows: int, etf_rows: int) -> None:
-        with _lock:
-            _state.update({"processed": idx, "total": total, "current_day": day})
-
-    def _run() -> None:
+def start(days: int, force: bool, source: str, then: Callable[[], Any] | None = None) -> dict[str, Any]:
+    """수집을 백그라운드로 돌린다. `then`은 수집이 끝난 뒤 실행할 후속 작업(예: 신호 로그 적재)이며,
+    호출자가 명시적으로 넘긴 경우에만 실행된다."""
+    def _target(progress):
         from .ingest import run_ingest
-        try:
-            run_ingest(days=days, force=force, source=source, on_progress=_progress)
-            with _lock:
-                _state.update({"ok": True})
-        except Exception as exc:
-            with _lock:
-                _state.update({"ok": False, "error": str(exc)})
-        finally:
-            with _lock:
-                _state.update({"running": False, "finished_at": datetime.now(timezone.utc).isoformat()})
 
-    threading.Thread(target=_run, daemon=True, name="mscr-ingest").start()
-    return snapshot
+        run_ingest(days=days, force=force, source=source, on_progress=lambda idx, total, day, stock_rows, etf_rows: progress(idx, total, day))
+        if then is not None:
+            then()
+
+    state = jobs.start(NAME, _target, {"source": source, "days": days, "force": force})
+    return state | {"current_day": state.get("current")}

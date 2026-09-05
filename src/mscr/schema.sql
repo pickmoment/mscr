@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS screens (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS screen_runs (
+  screen_id INTEGER NOT NULL REFERENCES screens(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  matched INTEGER NOT NULL DEFAULT 0,
+  ran_at TEXT NOT NULL,
+  PRIMARY KEY (screen_id, date)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS screen_signals (
+  screen_id INTEGER NOT NULL REFERENCES screens(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  rank INTEGER NOT NULL,
+  score REAL,
+  close REAL,
+  PRIMARY KEY (screen_id, date, ticker)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_screen_signals_ticker ON screen_signals(ticker, date);
+
 CREATE TABLE IF NOT EXISTS watchlists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
@@ -134,6 +153,7 @@ CREATE TABLE IF NOT EXISTS trade_plans (
   tp2_ratio REAL NOT NULL CHECK (tp2_ratio > 0 AND tp2_ratio < 1),
   tp3_trailing_pct REAL NOT NULL CHECK (tp3_trailing_pct > 0),
   enabled INTEGER NOT NULL DEFAULT 1,
+  setup TEXT,
   note TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
