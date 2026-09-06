@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, MarketBreadth, MarketRankRow, MarketStats } from '../lib/api';
 import { compactVolume, ratio, won } from '../lib/format';
 import { SelectTicker } from '../lib/nav';
+import ViewHeader from './ViewHeader';
 
 const changeClass = (value: number | null | undefined) => value == null ? '' : value > 0 ? 'change-up' : value < 0 ? 'change-down' : '';
 const fmtPct2 = (value: number | null | undefined) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -67,11 +68,14 @@ export default function MarketStatsPanel({ onSelect }: { onSelect: SelectTicker 
   }, [date]);
 
   return <div className="page">
-    <div className="page-head">
-      <h1>시장 통계</h1>
-      <label className="check">기준일<input type="date" className="w-md" value={date} min={dates[0]} max={dates[dates.length - 1]} onChange={event => setDate(event.target.value)} /></label>
-      {loading && <span className="progress-note"><span className="spinner" aria-hidden="true" />조회 중…</span>}
-    </div>
+    <ViewHeader
+      title="시장 통계"
+      lede={<>로컬에 수집된 일봉으로 계산한 <b>특정 거래일</b>의 시장 전체 통계입니다. 날짜를 골라 과거도 볼 수 있습니다.</>}
+      actions={<>
+        <label className="check">기준일<input type="date" className="w-md" value={date} min={dates[0]} max={dates[dates.length - 1]} onChange={event => setDate(event.target.value)} /></label>
+        {loading && <span className="progress-note"><span className="spinner" aria-hidden="true" />조회 중…</span>}
+      </>}
+    />
     {/* 통계가 남아 있으면 휴장일 안내(경고), 비어 있으면 조회 실패(에러) */}
     {!loading && status && <div className="msg" data-tone={stats ? 'warn' : 'error'}>{status}</div>}
     {!stats && !loading && <div className="empty">{status || '날짜를 선택하면 그 날의 시장 통계를 보여줍니다.'}</div>}

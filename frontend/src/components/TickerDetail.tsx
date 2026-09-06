@@ -5,6 +5,7 @@ import { ratio, won } from '../lib/format';
 import PositionPlanner from './PositionPlanner';
 import { defaultPlan, loadPositionPlans, POSITION_EVENT, PositionPlan, storePositionPlan } from '../lib/position';
 import { SelectTicker } from '../lib/nav';
+import ViewHeader from './ViewHeader';
 
 const defaultConfig: ChartIndicatorParams = { maPeriods: [5, 20, 60], rsiPeriod: 14, macdFast: 12, macdSlow: 26, macdSignal: 9, bbPeriod: 20, bbK: 2, volumeMaPeriod: 50 };
 const defaultEnabled = ['ma', 'rsi', 'macd', 'bb', 'volume_ma'];
@@ -51,7 +52,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
     return JSON.stringify(current) === JSON.stringify(next) ? current : next;
   }), [ticker]);
   useEffect(readPlan, [readPlan]);
-  // 트레이딩 탭에서 계획을 차트로 보내면 같은 종목을 보고 있어도 블록을 다시 읽어야 한다.
+  // 계획 화면에서 계획을 차트로 보내면 같은 종목을 보고 있어도 블록을 다시 읽어야 한다.
   useEffect(() => { window.addEventListener(POSITION_EVENT, readPlan); return () => window.removeEventListener(POSITION_EVENT, readPlan); }, [readPlan]);
   const savePlan = useCallback((next: PositionPlan | null) => { setPlan(next); if (ticker) storePositionPlan(ticker, next); }, [ticker]);
   useEffect(() => {
@@ -71,7 +72,11 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
     window.addEventListener('keydown', navigate);
     return () => window.removeEventListener('keydown', navigate);
   }, [ticker, tickers, onSelect]);
-  if (!ticker) return <div className="panel empty">스크리너에서 종목을 선택하세요.</div>;
+  // 종목이 붙기 전에만 머리말을 보인다 — 선택된 뒤에는 차트가 화면 높이를 다 써야 한다.
+  if (!ticker) return <div className="page">
+    <ViewHeader title="종목 상세" lede="어느 화면에서든 종목을 고르면 열립니다. 차트·지표·보유·계획을 한 화면에서 봅니다." />
+    <div className="panel empty">위쪽 검색창에 종목명이나 코드를 넣거나, 다른 화면에서 종목을 클릭하세요.</div>
+  </div>;
   if (!detail) return <div className="panel empty">종목 정보를 불러오는 중…</div>;
   const toggle = (key: string) => setEnabled(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
   const latestRsi = chart?.rsi?.at(-1)?.value;

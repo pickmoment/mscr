@@ -236,6 +236,22 @@ def delete_indicator(indicator_id: int):
         db.execute("DELETE FROM indicator_definitions WHERE id=?", (indicator_id,))
     return Response(status_code=204)
 
+@router.get("/instruments/search")
+def search_instruments(q: str = Query(..., min_length=1, max_length=40), limit: int = Query(12, ge=1, le=50)):
+    """종목명·코드 부분 일치 검색. 정확 일치 → 접두 일치 → 부분 일치 순으로 정렬한다."""
+    needle = q.strip()
+    if not needle:
+        return []
+    like, prefix = f"%{needle}%", f"{needle}%"
+    with db_session() as db:
+        rows = db.execute(
+            "SELECT ticker,name,kind,market FROM instruments "
+            "WHERE delisted=0 AND (ticker LIKE ? OR name LIKE ?) "
+            "ORDER BY CASE WHEN ticker=? THEN 0 WHEN name=? THEN 1 WHEN ticker LIKE ? THEN 2 WHEN name LIKE ? THEN 3 ELSE 4 END, name LIMIT ?",
+            (like, like, needle, needle, prefix, prefix, limit)).fetchall()
+    return [dict(row) for row in rows]
+
+
 @router.get("/instruments/{ticker}")
 def instrument(ticker: str):
     with db_session() as db:

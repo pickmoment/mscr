@@ -2,6 +2,7 @@ export type ScreenSpec = { universe: { kinds: string[]; markets: string[]; exclu
 export type ScreenRow = { ticker: string; name: string; kind: string; market: string | null; close: number | null; change_pct: number | null; volume: number | null; value: number | null; market_cap: number | null; per: number | null; pbr: number | null; bars_available: number; price_jump_flag: number; halted: number; weighted_return: number | null; _sort?: number | null };
 export type Meta = { as_of: string | null; instrument_count: { stock: number; etf: number }; bars_rows: number; last_ingest_at: string | null; data_ready: boolean };
 export type Instrument = { ticker: string; name: string; kind: string; market: string | null; category: string | null; base_index: string | null; as_of: string | null; quote: Record<string, number | boolean | null>; fundamental: Record<string, number | null>; bars_available: number; position: Position | null; etf: { nav: number | null; premium_pct: number | null; tracking_error: number | null; top_holdings: { name: string; weight: number }[] | null } | null };
+export type InstrumentHit = { ticker: string; name: string; kind: string; market: string | null };
 export type ChartPoint = { time: string; value: number };
 export type ChartBar = { time: string; open: number; high: number; low: number; close: number; volume: number; halted: boolean };
 export type ChartIndicatorParams = { maPeriods: number[]; rsiPeriod: number; macdFast: number; macdSlow: number; macdSignal: number; bbPeriod: number; bbK: number; volumeMaPeriod: number };
@@ -144,6 +145,7 @@ export const api = {
   saveIndicator: (indicator: Pick<IndicatorDefinition, 'key' | 'label' | 'unit' | 'formula' | 'parameters' | 'enabled'>) => request<{ id: number }>('/api/indicators', { method: 'POST', body: JSON.stringify(indicator) }),
   deleteIndicator: (id: number) => request<void>(`/api/indicators/${id}`, { method: 'DELETE' }),
   instrument: (ticker: string) => request<Instrument>(`/api/instruments/${ticker}`),
+  searchInstruments: (q: string) => request<InstrumentHit[]>(`/api/instruments/search?q=${encodeURIComponent(q)}`),
   bars: (ticker: string, range: string, indicators: string[], config: ChartIndicatorParams) => request<BarsResponse>(barsPath(ticker, range, indicators, config)),
   portfolio: () => request<PortfolioData>('/api/portfolio'),
   trades: () => request<Trade[]>('/api/trades'),

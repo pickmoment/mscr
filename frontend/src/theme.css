@@ -141,7 +141,7 @@ html { scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 .app-shell {
   height: 100%;
   display: grid;
-  grid-template-rows: var(--header-h) auto minmax(0, 1fr);
+  grid-template-rows: var(--header-h) auto auto minmax(0, 1fr);
   background: radial-gradient(1200px 420px at 82% -18%, var(--bg-glow) 0, var(--bg) 62%);
 }
 
@@ -199,46 +199,17 @@ html { scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 }
 .status-dot[data-live='true'] { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
 
-/* ---- tabs ---- */
-.tabs {
-  display: flex;
-  align-items: stretch;
-  gap: var(--s1);
-  padding: 0 var(--s6);
-  border-bottom: 1px solid var(--line);
-}
-
-.tab {
-  position: relative;
-  border: 0;
-  background: none;
-  color: var(--text-3);
-  font: 600 13px/1.4 var(--font-ui);
-  padding: 13px var(--s4) 12px;
-  cursor: pointer;
-  border-radius: var(--r1) var(--r1) 0 0;
-  transition: color .12s ease, background .12s ease;
-}
-.tab:hover { color: var(--text-2); background: var(--surface-2); }
-.tab[aria-selected='true'] { color: var(--text); }
-.tab[aria-selected='true']::after {
-  content: '';
-  position: absolute;
-  left: var(--s3);
-  right: var(--s3);
-  bottom: -1px;
-  height: 2px;
-  border-radius: var(--rp);
-  background: var(--accent);
-}
-
-.tab-sep {
-  width: 1px;
-  margin: 12px var(--s3);
-  background: var(--line);
-}
-
-.tab-spacer { flex: 1; }
+/* ---- 2단 내비게이션: 영역 줄 + 하위 화면 줄 ---- */
+.areas { display: flex; align-items: stretch; gap: var(--s2); padding: 0 var(--s6); border-bottom: 1px solid var(--line); }
+.area { position: relative; border: 0; background: none; color: var(--text-3); font: 700 14px/1.4 var(--font-ui); padding: 12px var(--s4) 11px; cursor: pointer; border-radius: var(--r1) var(--r1) 0 0; transition: color .12s ease, background .12s ease; }
+.area:hover { color: var(--text-2); background: var(--surface-2); }
+.area[aria-selected='true'] { color: var(--text); }
+.area[aria-selected='true']::after { content: ''; position: absolute; left: var(--s3); right: var(--s3); bottom: -1px; height: 2px; border-radius: var(--rp); background: var(--accent); }
+.subtabs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s1); padding: var(--s2) var(--s6); border-bottom: 1px solid var(--line); background: var(--surface-3); min-height: 38px; }
+.subtab { border: 0; background: none; color: var(--text-3); font: 600 12px/1.4 var(--font-ui); padding: 5px var(--s3); border-radius: var(--rp); cursor: pointer; }
+.subtab:hover { color: var(--text-2); background: var(--surface-2); }
+.subtab[aria-selected='true'] { color: var(--accent-ink); background: var(--accent); }
+.subtab:disabled { opacity: .45; cursor: not-allowed; }
 
 .content { min-height: 0; padding: var(--s5) var(--s6) var(--s6); }
 .content > section { height: 100%; min-height: 0; }
@@ -263,6 +234,10 @@ html { scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
   padding-right: var(--s1);
 }
 
+/* 본문이 남은 높이를 전부 쓰는 화면(스크리너·설정·관심종목 등). 머리말 한 줄과 본문 한 행으로 나눠
+   `height:100%` 그리드가 머리말 높이만큼 화면 밖으로 밀려나는 것을 막는다. */
+.page--fill { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--s3); }
+
 .scroll { overflow: auto; min-height: 0; }
 
 /* ============================================================
@@ -282,21 +257,22 @@ html { scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 .section-title + * { margin-top: 0; }
 /* Inside gap-driven containers the block margin double-counts; the gap owns the rhythm. */
 .toolbar > .section-title,
-.page-head .section-title,
 .quote-id > .section-title,
 .formula-block > .section-title { margin: 0; }
 .stack > .section-title { margin: var(--s4) 0 0; }
 .stack > .section-title:first-child { margin-top: 0; }
 
-.page-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  flex-wrap: wrap;
-  margin-bottom: var(--s3);
-}
-.page-head h1 { margin-right: var(--s2); }
+/* 화면 머리말 — 제목 + 한 줄 설명. 모든 화면이 같은 구조를 쓴다. */
+.view-head { display: grid; gap: var(--s2); margin-bottom: var(--s4); }
+.view-head-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.view-lede { color: var(--text-3); font-size: 12px; line-height: 1.65; max-width: 92ch; }
 
+/* 용어 팝오버 — 점선 밑줄 글자를 누르면 정의가 뜬다. */
+.term-wrap { position: relative; display: inline-block; }
+.term { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: help; border-bottom: 1px dashed var(--line-2); }
+.term:hover { border-bottom-color: var(--accent); color: var(--accent-text); }
+.term-pop { position: absolute; z-index: 40; left: 0; top: calc(100% + 6px); width: min(340px, 78vw); padding: var(--s3) var(--s4); border: 1px solid var(--line-2); border-radius: var(--r2); background: var(--surface-2); box-shadow: var(--shadow-2); color: var(--text-2); font: 12px/1.7 var(--font-ui); text-align: left; white-space: normal; }
+.term-pop b { display: block; margin-bottom: var(--s1); color: var(--text); }
 .hint { color: var(--text-3); font-size: 12px; line-height: 1.6; }
 .subtle { color: var(--text-3); font-size: 12px; line-height: 1.5; }
 .muted { color: var(--text-3); }
@@ -576,6 +552,10 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 .screener-panel { padding: var(--s5); }
 .grid-wrap { flex: 1; min-height: 0; }
 .screener-results { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); min-width: 0; }
+/* 결과 영역 안쪽 탭 줄 — 셸의 하위 탭과 같은 알약 모양이되 배경·여백은 뺀다. */
+.subtabs--inline { padding: 0 0 var(--s2); border-bottom: 1px solid var(--line); background: none; min-height: 0; }
+/* 조건을 길게 스크롤해도 실행 버튼은 사이드바 바닥에 붙어 있어야 한다. */
+.screener-run { position: sticky; bottom: calc(var(--s5) * -1); z-index: 2; margin-top: auto; padding: var(--s3) 0; background: var(--surface); border-top: 1px solid var(--line); }
 
 .formula-block { display: grid; gap: var(--s2); }
 .formula-block > .section-title { margin: 0; }
@@ -618,6 +598,15 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 .formula-suggest code { color: var(--accent-text); font: 12px var(--font-mono); }
 .formula-suggest span { color: var(--text-2); font-size: 12px; }
 .formula-suggest em { grid-column: 1 / -1; color: var(--text-3); font: 11px var(--font-mono); font-style: normal; overflow-wrap: anywhere; }
+
+/* 전역 종목 검색 드롭다운 — .formula-suggest와 같은 규칙을 쓴다. */
+.ticker-search { position: relative; display: block; }
+.ticker-search-list { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; max-height: 300px; overflow: auto; margin: 0; padding: var(--s1); list-style: none; border: 1px solid var(--line-2); border-radius: var(--r2); background: var(--surface-2); box-shadow: var(--shadow-2); }
+.ticker-search-list li { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: var(--s2); padding: 5px var(--s2); border-radius: var(--r1); cursor: pointer; }
+.ticker-search-list li.active { background: var(--surface-hover); }
+.ticker-search-list li code { color: var(--accent-text); font: 12px var(--font-mono); }
+.ticker-search-list li span { color: var(--text); font-size: 13px; }
+.ticker-search-list li em { color: var(--text-3); font: 11px var(--font-mono); font-style: normal; }
 
 /* ============================================================
    11. Ticker detail
@@ -694,6 +683,12 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 .stat-card strong { font: 600 18px/1.25 var(--font-mono); letter-spacing: -.02em; }
 .stat-card .subtle { font-size: 11px; }
 
+/* 브리핑 "다음 할 일" — 카드 테두리로 급한 정도를 구분한다. */
+.next-steps .stat-card[data-tone='danger'] { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.next-steps .stat-card[data-tone='warn'] { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.next-steps .stat-card[data-tone='accent'] { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.next-steps .stat-card label { color: var(--text); font-weight: 600; }
+
 .link-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); max-height: 380px; overflow-y: auto; }
 .link-list li { padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
 .link-list li:last-child { border-bottom: 0; padding-bottom: 0; }
@@ -730,16 +725,6 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 /* ============================================================
    15. Trading
    ============================================================ */
-.trading-layout {
-  display: grid;
-  grid-template-columns: minmax(420px, 540px) minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(320px, 1.3fr) minmax(200px, 1fr);
-  gap: var(--s4);
-  height: 100%;
-  overflow: auto;
-}
-.trading-head, .order-panel, .autoplan-panel { grid-column: 1 / -1; }
-.trading-head { padding: var(--s3) var(--s4); display: grid; gap: var(--s2); }
 
 .plan-editor, .plan-list { padding: var(--s5); overflow: auto; }
 .plan-item { display: grid; gap: var(--s2); padding: var(--s4) 0; border-bottom: 1px solid var(--line); }
@@ -796,6 +781,15 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
   font: 12px/1.9 var(--font-mono);
 }
 .help-box b { color: var(--text); margin-right: var(--s2); }
+
+/* 도움말 — 사용 흐름 8단계와 용어집. */
+.help-flow { margin: 0; padding-left: var(--s5); display: grid; gap: var(--s3); line-height: 1.7; }
+.help-flow li b { color: var(--text); margin-right: var(--s2); }
+.help-flow li > .toolbar { margin-top: var(--s1); }
+.help-term { padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
+.help-term:last-child { border-bottom: 0; }
+.help-term b { color: var(--text); }
+.help-term p { color: var(--text-2); font-size: 13px; line-height: 1.7; margin-top: var(--s1); }
 
 .parameter-editor { grid-column: 1 / -1; display: grid; gap: var(--s2); }
 .parameter-title { display: flex; align-items: center; justify-content: space-between; color: var(--text-3); font-size: 12px; font-weight: 600; }

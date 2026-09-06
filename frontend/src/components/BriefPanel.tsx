@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ViewKey } from '../App';
 import { api, BriefData, BriefScreen, JobStatus } from '../lib/api';
 import { won } from '../lib/format';
+import { phaseLabel } from '../lib/labels';
 import { SelectTicker } from '../lib/nav';
+import NextSteps from './NextSteps';
+import Term from './Term';
+import ViewHeader from './ViewHeader';
 
-type TabKey = 'screener' | 'detail' | 'watchlist' | 'stats' | 'live' | 'portfolio' | 'trading' | 'indicators' | 'settings';
-
-const phaseLabel: Record<string, string> = { waiting_entry: '진입 대기', holding: '보유 중', tp1_done: '1차 완료', trailing: '트레일링', closed: '청산 완료' };
 const ROW_CAP = 10;
 const changeClass = (value: number | null | undefined) => value == null ? '' : value > 0 ? 'change-up' : value < 0 ? 'change-down' : '';
 // 브리핑 페이로드의 `_pct`는 전부 이미 0~100 퍼센트다. 어떤 값에도 100을 곱하지 않는다.
@@ -25,7 +27,7 @@ const planOrder = (a: { triggered: boolean; distance_pct: number | null }, b: { 
   return left - right;
 };
 
-export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTicker; onOpenTab: (tab: TabKey) => void }) {
+export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectTicker; onOpenView: (view: ViewKey) => void }) {
   const [data, setData] = useState<BriefData | null>(null);
   const [loading, setLoading] = useState(true);
   const [job, setJob] = useState<JobStatus | null>(null);
@@ -172,21 +174,28 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
     </div>;
   };
 
-  // .page가 스크롤을 맡고 안쪽 .panel은 내용만큼 자란다. 패널 자체를 스크롤 컨테이너로 두면 높이가 없어 탭바까지 밀려난다.
+  // .page가 스크롤을 맡고 안쪽 .panel은 내용만큼 자란다. 패널 자체를 스크롤 컨테이너로 두면 높이가 없어 상단 내비게이션까지 밀려난다.
   return <div className="page"><div className="panel panel--pad stack stack--lg">
-    <div className="toolbar">
-      <div className="section-title">오늘의 브리핑</div>
-      <span className="badge">기준일 {data ? dash(data.as_of) : '—'}</span>
-      <span className="badge">직전 {data ? dash(data.previous) : '—'}</span>
-      <button className="btn btn--ghost push" onClick={load} disabled={loading}>새로고침</button>
-      <button className="btn btn--primary" onClick={capture} disabled={running} title="저장된 스크리너 프리셋을 오늘 날짜로 다시 돌려 신호 로그에 남깁니다.">신호 수집</button>
-      <button className="btn btn--ghost" aria-pressed={showSettings} onClick={() => setShowSettings(current => !current)} title="브리핑의 프리셋 신호 구획에서 추적할 프리셋을 고릅니다.">프리셋 설정</button>
-      {/* 작업을 막 띄운 직후에는 서버가 아직 총 건수를 세지 않아 total·current가 비어 온다. 그때는 '준비 중'만 보여 준다. */}
-      {running && <span className="progress-note"><span className="spinner" />
-        {job?.total == null ? '준비 중' : `${job.processed ?? 0}/${job.total}`}
-        {job?.current ? ` ${job.current}` : ''}
-      </span>}
-    </div>
+    <ViewHeader
+      title="오늘의 브리핑"
+      lede={<>이미 쌓인 <Term id="signal_log" />·계획·관심종목·보유만 읽어 오늘 볼 것을 모읍니다. 스크리너를 다시 돌리지 않으므로 즉시 뜹니다.</>}
+      meta={<>
+        <span className="badge">기준일 {data ? dash(data.as_of) : '—'}</span>
+        <span className="badge">직전 {data ? dash(data.previous) : '—'}</span>
+      </>}
+      actions={<>
+        <button className="btn btn--ghost" onClick={load} disabled={loading}>새로고침</button>
+        <button className="btn btn--primary" onClick={capture} disabled={running} title="저장된 스크리너 프리셋을 오늘 날짜로 다시 돌려 신호 로그에 남깁니다.">신호 수집</button>
+        <button className="btn btn--ghost" aria-pressed={showSettings} onClick={() => setShowSettings(current => !current)} title="브리핑의 프리셋 신호 구획에서 추적할 프리셋을 고릅니다.">프리셋 설정</button>
+        {/* 작업을 막 띄운 직후에는 서버가 아직 총 건수를 세지 않아 total·current가 비어 온다. 그때는 '준비 중'만 보여 준다. */}
+        {running && <span className="progress-note"><span className="spinner" />
+          {job?.total == null ? '준비 중' : `${job.processed ?? 0}/${job.total}`}
+          {job?.current ? ` ${job.current}` : ''}
+        </span>}
+      </>}
+    />
+
+    <NextSteps data={data} onOpenView={onOpenView} />
 
     {showSettings && <div className="stack">
       <div className="toolbar">
@@ -199,7 +208,7 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
           <input type="checkbox" checked={data ? (data.tracked_screen_ids ?? allScreens.map(item => item.id)).includes(screen.id) : true} onChange={() => toggleTrackedScreen(screen.id)} />
           {screen.name}
         </label>)}
-        {!allScreens.length && <span className="subtle">저장된 프리셋이 없습니다. 스크리너 탭에서 프리셋을 먼저 저장하세요.</span>}
+        {!allScreens.length && <span className="subtle">저장된 프리셋이 없습니다. 스크리너 화면에서 프리셋을 먼저 저장하세요.</span>}
       </div>
     </div>}
 
@@ -210,12 +219,12 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
     {data && summary && <>
       <div className="chip-row">
         <span className="badge" data-tone={summary.entered ? 'ok' : undefined}>신규 신호 {summary.entered}</span>
-        {!!summary.baselines && <span className="badge" data-tone="accent">최초 수집 {summary.baselines}</span>}
+        {!!summary.baselines && <span className="badge" data-tone="accent"><Term id="baseline">최초 수집</Term> {summary.baselines}</span>}
         <span className="badge" data-tone={summary.exited ? 'down' : undefined}>이탈 {summary.exited}</span>
         <span className="badge" data-tone={summary.near ? 'warn' : undefined}>트리거 대기 {summary.near}</span>
         <span className="badge" data-tone={summary.reached ? 'accent' : undefined}>목표 도달 {summary.reached}</span>
         <span className="badge" data-tone={summary.unprotected ? 'danger' : undefined}>손절 없는 보유 {summary.unprotected}</span>
-        <span className="badge" data-tone={data.heat.over_limit ? 'danger' : undefined} title="열린 계획과 대기 계획이 모두 손절에 걸렸을 때 잃는 금액의 총자산 대비 비율입니다. 계획별 손실 한도는 이 합계를 묶어 주지 않습니다.">히트 {pctText(data.heat.heat_pct)}</span>
+        <span className="badge" data-tone={data.heat.over_limit ? 'danger' : undefined}><Term id="heat">히트</Term> {pctText(data.heat.heat_pct)}</span>
       </div>
 
       {!!data.warnings.length && <div className="stack">
@@ -243,7 +252,7 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
         <div className="toolbar">
           <div className="section-title">계획</div>
           <span className="badge">{plans.length}건</span>
-          <button className="btn btn--ghost push" onClick={() => onOpenTab('trading')}>트레이딩 탭</button>
+          <button className="btn btn--ghost push" onClick={() => onOpenView('plans')}>계획 화면</button>
         </div>
         <table className="table table--nowrap table--rows">
           <thead><tr>{['이름', '종목', '단계', '현재가', '진입가', '손절가', '거리', '사유'].map(label => <th key={label} className={['현재가', '진입가', '손절가', '거리'].includes(label) ? 'num' : ''}>{label}</th>)}</tr></thead>
@@ -262,7 +271,7 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
               <td className={`num ${plan.near ? 'ok' : 'muted'}`}>{signedPct(plan.distance_pct)}</td>
               <td className="subtle">{dash(plan.reason)}</td>
             </tr>)}
-            {!plans.length && <tr><td colSpan={8} className="subtle">활성 계획이 없습니다. 트레이딩 탭에서 진입가·손절가를 정한 계획을 만들면 여기에서 거리와 트리거 여부를 봅니다.</td></tr>}
+            {!plans.length && <tr><td colSpan={8} className="subtle">활성 계획이 없습니다. 계획 화면에서 진입가·손절가를 정한 계획을 만들면 여기에서 거리와 트리거 여부를 봅니다.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -271,7 +280,7 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
         <div className="toolbar">
           <div className="section-title">관심종목 목표 도달</div>
           <span className="badge">{data.watchlist.lists}개 목록 · {data.watchlist.items}종목</span>
-          <button className="btn btn--ghost push" onClick={() => onOpenTab('watchlist')}>관심종목 탭</button>
+          <button className="btn btn--ghost push" onClick={() => onOpenView('watchlist')}>관심종목 화면</button>
         </div>
         <table className="table table--nowrap table--rows">
           <thead><tr>{['목록', '종목', '종가', '목표가', '괴리'].map(label => <th key={label} className={['종가', '목표가', '괴리'].includes(label) ? 'num' : ''}>{label}</th>)}</tr></thead>
@@ -292,7 +301,7 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
         <div className="toolbar">
           <div className="section-title">보유</div>
           <span className="badge">{data.positions.length}종목</span>
-          <button className="btn btn--ghost push" onClick={() => onOpenTab('portfolio')}>포트폴리오 탭</button>
+          <button className="btn btn--ghost push" onClick={() => onOpenView('portfolio')}>포트폴리오 화면</button>
         </div>
         <table className="table table--nowrap table--rows">
           <thead><tr>{['종목', '수량', '평단', '현재가', '평가손익', '비중', '손절 계획', '손절까지'].map(label => <th key={label} className={['종목', '손절 계획'].includes(label) ? '' : 'num'}>{label}</th>)}</tr></thead>

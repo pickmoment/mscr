@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, AppSettings, IngestStatus } from '../lib/api';
+import ViewHeader from './ViewHeader';
 
 const krxModeLabel: Record<AppSettings['krx']['mode'], string> = { openapi: 'Open API 키', idpw: '아이디/비밀번호', anonymous: '인증 없이 사용' };
 const sourceNote: Record<'env' | 'file', string> = { env: '환경변수 우선 적용 중', file: '이 툴에 저장됨' };
@@ -125,104 +126,111 @@ export default function SettingsPanel() {
   if (!settings) return <div className="empty">{loadError || '설정을 불러오는 중…'}</div>;
   const krxNote = settings.krx.source && sourceNote[settings.krx.source];
   const feedback = (msg: Feedback) => msg.text && <span className="msg" data-tone={msg.ok ? 'ok' : 'error'}>{msg.text}</span>;
-  return <div className="settings-layout">
-    <section className="panel settings-card">
-      <h1>KRX 데이터 수집 인증</h1>
-      <div className="toolbar">
-        <span className="badge" data-tone={settings.krx.mode === 'anonymous' ? undefined : 'ok'}>{krxModeLabel[settings.krx.mode]}</span>
-        {krxNote && <span className="subtle">{krxNote}</span>}
-        {settings.krx.openapi_key_masked && <span className="subtle">키 {settings.krx.openapi_key_masked}</span>}
-        {settings.krx.krx_id_masked && <span className="subtle">아이디 {settings.krx.krx_id_masked}</span>}
-      </div>
-      <form className="form-grid" onSubmit={saveKrx}>
-        <label>Open API 키<input name="openapi_key" value={krx.openapi_key} autoComplete="off" placeholder="PS12...cdef" onChange={event => setKrx(current => ({ ...current, openapi_key: event.target.value }))} /></label>
-        <label>KRX 아이디<input name="krx_id" value={krx.krx_id} autoComplete="off" placeholder="krx_login_id" onChange={event => setKrx(current => ({ ...current, krx_id: event.target.value }))} /></label>
-        <label>KRX 비밀번호<input name="krx_pw" type="password" value={krx.krx_pw} autoComplete="new-password" placeholder="비밀번호" onChange={event => setKrx(current => ({ ...current, krx_pw: event.target.value }))} /></label>
-        <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button><button type="button" className="btn btn--danger" disabled={busy || !settings.krx.stored.length} onClick={clearKrx}>삭제</button><span className="subtle">입력한 항목만 저장됩니다 · {settings.credential_paths.krx}</span></div>
-        {feedback(krxMsg)}
-      </form>
-    </section>
-
-    <section className="panel settings-card">
-      <h1>브로커 인증</h1>
-      <div className="toolbar">
-        {settings.kis.enabled
-          ? <span className="badge" data-tone={settings.kis.env === 'real' ? 'real' : 'live'}>사용 중 · {settings.kis.env === 'real' ? '실전' : '모의'} · {settings.kis.account_masked || '계좌 미확인'}</span>
-          : <span className="badge">브로커 미설정</span>}
-        {!settings.kis.enabled && <span className="subtle">{settings.kis.reason || '앱키·앱시크릿·계좌번호를 저장하거나 KIS 환경변수를 설정하세요.'}</span>}
-        {settings.kis.source === 'env' && <span className="subtle">환경변수 우선 적용 중</span>}
-      </div>
-      {(['paper', 'real'] as const).map(env => {
-        const configuredAccount = settings.kis.accounts[env];
-        const active = settings.kis.source === 'file' && settings.kis.active_env === env;
-        return <div className="kis-env-block" key={env}>
-          <div className="toolbar">
-            <b>{kisEnvLabel[env]}</b>
-            {configuredAccount
-              ? <span className="badge" data-tone={active ? 'ok' : undefined}>{active ? '사용 중' : '설정됨'} · {configuredAccount}</span>
-              : <span className="badge">미설정</span>}
-            {configuredAccount && !active && <button type="button" className="btn btn--ghost" disabled={busy} onClick={activateKis(env)}>이 계좌로 전환</button>}
-          </div>
-          <form className="form-grid" onSubmit={saveKis(env)}>
-            <label>앱키<input name="app_key" value={kisForms[env].app_key} autoComplete="off" placeholder="APP KEY" onChange={event => setKisForms(current => ({ ...current, [env]: { ...current[env], app_key: event.target.value } }))} /></label>
-            <label>앱시크릿<input name="app_secret" type="password" value={kisForms[env].app_secret} autoComplete="new-password" placeholder="APP SECRET" onChange={event => setKisForms(current => ({ ...current, [env]: { ...current[env], app_secret: event.target.value } }))} /></label>
-            <label>계좌번호<input name="account" value={kisForms[env].account} placeholder={env === 'real' ? '12345678-01' : '12345678'} onChange={event => setKisForms(current => ({ ...current, [env]: { ...current[env], account: event.target.value } }))} /></label>
-            <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button><button type="button" className="btn btn--danger" disabled={busy || !configuredAccount} onClick={clearKis(env)}>삭제</button></div>
-            {feedback(kisMsgs[env])}
-          </form>
-        </div>;
-      })}
-      <span className="subtle">{settings.credential_paths.kis}</span>
-    </section>
-
-    <section className="panel settings-card">
-      <h1>수집 요청 간격</h1>
-      <div className="toolbar"><span className="badge">{delaySourceLabel[settings.request_delay_source]}</span><span className="subtle">현재 {settings.request_delay_sec}초 · KRX 요청 사이 대기 시간</span></div>
-      <form className="form-grid" onSubmit={savePreferences}>
-        <label>요청 간격(초)<input name="request_delay_sec" type="number" step="0.1" min="0" max="10" value={delay} onChange={event => setDelay(event.target.value)} /></label>
-        <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button></div>
-        {feedback(prefMsg)}
-      </form>
-    </section>
-
-    <section className="panel settings-card">
-      <h1>데이터 수집</h1>
-      <div className="toolbar">
-        <button type="button" className="btn btn--ghost" disabled={busy} onClick={checkKrxLatest}>KRX 최신 거래일 조회</button>
-        {feedback(krxLatestMsg)}
-      </div>
-      <form className="form-grid" onSubmit={startIngest}>
-        <label>수집 기간(일)<input type="number" min="1" max="3650" value={ingestForm.days} onChange={event => setIngestForm(current => ({ ...current, days: event.target.value }))} /></label>
-        <label>소스<select value={ingestForm.source} onChange={event => setIngestForm(current => ({ ...current, source: event.target.value as 'krx' | 'fdr' | 'alphasquare' }))}>
-          <option value="krx">krx (기본)</option>
-          <option value="fdr">fdr (전종목 스냅샷 대체, 주식만)</option>
-          <option value="alphasquare">alphasquare (종목별 개별 조회, 최후 폴백, 수집 기간 그대로 적용)</option>
-        </select></label>
-        <label className="check"><input type="checkbox" checked={ingestForm.force} onChange={event => setIngestForm(current => ({ ...current, force: event.target.checked }))} />이미 수집된 날짜도 다시 수집(--force)</label>
+  // 설정 카드는 높이를 꽉 채우고 스스로 스크롤하므로, 머리말은 그 바깥에서 한 행을 차지한다.
+  return <div className="page page--fill">
+    <ViewHeader
+      title="설정"
+      lede={<>데이터 수집 인증·브로커 인증·수집 실행을 관리합니다. 값은 <code>~/.mscr/</code>에 저장되며 환경변수가 있으면 그쪽이 우선합니다.</>}
+    />
+    <div className="settings-layout">
+      <section className="panel settings-card">
+        <div className="section-title">KRX 데이터 수집 인증</div>
         <div className="toolbar">
-          <button className="btn btn--primary" disabled={busy || !!ingestStatus?.running}>{ingestStatus?.running ? '수집 중…' : '수집 시작'}</button>
-          {ingestStatus?.running && <span className="progress-note"><span className="spinner" aria-hidden="true" />{ingestStatus.total ? `${ingestStatus.processed}/${ingestStatus.total} · ${ingestStatus.current_day || ''}` : '진행 중…'}</span>}
+          <span className="badge" data-tone={settings.krx.mode === 'anonymous' ? undefined : 'ok'}>{krxModeLabel[settings.krx.mode]}</span>
+          {krxNote && <span className="subtle">{krxNote}</span>}
+          {settings.krx.openapi_key_masked && <span className="subtle">키 {settings.krx.openapi_key_masked}</span>}
+          {settings.krx.krx_id_masked && <span className="subtle">아이디 {settings.krx.krx_id_masked}</span>}
         </div>
-        {feedback(ingestMsg)}
-        {!ingestStatus?.running && ingestStatus?.finished_at && (
-          ingestStatus.ok
-            ? <span className="msg" data-tone="ok">마지막 수집 완료 ({ingestStatus.finished_at})</span>
-            : <span className="msg" data-tone="error">마지막 수집 실패: {ingestStatus.error}</span>
-        )}
-      </form>
-    </section>
-
-    <section className="panel settings-card">
-      <h1>환경 정보</h1>
-      <table className="table table--kv"><tbody>
-        <tr><td>MSCR_HOME</td><td>{settings.mscr_home}</td></tr>
-        <tr><td>데이터베이스</td><td>{settings.db_path}</td></tr>
-        <tr><td>스키마 버전</td><td>{settings.schema_version}</td></tr>
-        <tr><td>기준일</td><td>{settings.data.as_of || '—'}</td></tr>
-        <tr><td>일봉 행 수</td><td>{settings.data.bars_rows.toLocaleString('ko-KR')}</td></tr>
-        <tr><td>종목 수</td><td>주식 {settings.data.instrument_count.stock.toLocaleString('ko-KR')} · ETF {settings.data.instrument_count.etf.toLocaleString('ko-KR')}</td></tr>
-        <tr><td>최근 수집</td><td>{settings.data.last_ingest_at || '—'}</td></tr>
-      </tbody></table>
-    </section>
+        <form className="form-grid" onSubmit={saveKrx}>
+          <label>Open API 키<input name="openapi_key" value={krx.openapi_key} autoComplete="off" placeholder="PS12...cdef" onChange={event => setKrx(current => ({ ...current, openapi_key: event.target.value }))} /></label>
+          <label>KRX 아이디<input name="krx_id" value={krx.krx_id} autoComplete="off" placeholder="krx_login_id" onChange={event => setKrx(current => ({ ...current, krx_id: event.target.value }))} /></label>
+          <label>KRX 비밀번호<input name="krx_pw" type="password" value={krx.krx_pw} autoComplete="new-password" placeholder="비밀번호" onChange={event => setKrx(current => ({ ...current, krx_pw: event.target.value }))} /></label>
+          <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button><button type="button" className="btn btn--danger" disabled={busy || !settings.krx.stored.length} onClick={clearKrx}>삭제</button><span className="subtle">입력한 항목만 저장됩니다 · {settings.credential_paths.krx}</span></div>
+          {feedback(krxMsg)}
+        </form>
+      </section>
+  
+      <section className="panel settings-card">
+        <div className="section-title">브로커 인증</div>
+        <div className="toolbar">
+          {settings.kis.enabled
+            ? <span className="badge" data-tone={settings.kis.env === 'real' ? 'real' : 'live'}>사용 중 · {settings.kis.env === 'real' ? '실전' : '모의'} · {settings.kis.account_masked || '계좌 미확인'}</span>
+            : <span className="badge">브로커 미설정</span>}
+          {!settings.kis.enabled && <span className="subtle">{settings.kis.reason || '앱키·앱시크릿·계좌번호를 저장하거나 KIS 환경변수를 설정하세요.'}</span>}
+          {settings.kis.source === 'env' && <span className="subtle">환경변수 우선 적용 중</span>}
+        </div>
+        {(['paper', 'real'] as const).map(env => {
+          const configuredAccount = settings.kis.accounts[env];
+          const active = settings.kis.source === 'file' && settings.kis.active_env === env;
+          return <div className="kis-env-block" key={env}>
+            <div className="toolbar">
+              <b>{kisEnvLabel[env]}</b>
+              {configuredAccount
+                ? <span className="badge" data-tone={active ? 'ok' : undefined}>{active ? '사용 중' : '설정됨'} · {configuredAccount}</span>
+                : <span className="badge">미설정</span>}
+              {configuredAccount && !active && <button type="button" className="btn btn--ghost" disabled={busy} onClick={activateKis(env)}>이 계좌로 전환</button>}
+            </div>
+            <form className="form-grid" onSubmit={saveKis(env)}>
+              <label>앱키<input name="app_key" value={kisForms[env].app_key} autoComplete="off" placeholder="APP KEY" onChange={event => setKisForms(current => ({ ...current, [env]: { ...current[env], app_key: event.target.value } }))} /></label>
+              <label>앱시크릿<input name="app_secret" type="password" value={kisForms[env].app_secret} autoComplete="new-password" placeholder="APP SECRET" onChange={event => setKisForms(current => ({ ...current, [env]: { ...current[env], app_secret: event.target.value } }))} /></label>
+              <label>계좌번호<input name="account" value={kisForms[env].account} placeholder={env === 'real' ? '12345678-01' : '12345678'} onChange={event => setKisForms(current => ({ ...current, [env]: { ...current[env], account: event.target.value } }))} /></label>
+              <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button><button type="button" className="btn btn--danger" disabled={busy || !configuredAccount} onClick={clearKis(env)}>삭제</button></div>
+              {feedback(kisMsgs[env])}
+            </form>
+          </div>;
+        })}
+        <span className="subtle">{settings.credential_paths.kis}</span>
+      </section>
+  
+      <section className="panel settings-card">
+        <div className="section-title">수집 요청 간격</div>
+        <div className="toolbar"><span className="badge">{delaySourceLabel[settings.request_delay_source]}</span><span className="subtle">현재 {settings.request_delay_sec}초 · KRX 요청 사이 대기 시간</span></div>
+        <form className="form-grid" onSubmit={savePreferences}>
+          <label>요청 간격(초)<input name="request_delay_sec" type="number" step="0.1" min="0" max="10" value={delay} onChange={event => setDelay(event.target.value)} /></label>
+          <div className="toolbar"><button className="btn btn--primary" disabled={busy}>저장</button></div>
+          {feedback(prefMsg)}
+        </form>
+      </section>
+  
+      <section className="panel settings-card">
+        <div className="section-title">데이터 수집</div>
+        <div className="toolbar">
+          <button type="button" className="btn btn--ghost" disabled={busy} onClick={checkKrxLatest}>KRX 최신 거래일 조회</button>
+          {feedback(krxLatestMsg)}
+        </div>
+        <form className="form-grid" onSubmit={startIngest}>
+          <label>수집 기간(일)<input type="number" min="1" max="3650" value={ingestForm.days} onChange={event => setIngestForm(current => ({ ...current, days: event.target.value }))} /></label>
+          <label>소스<select value={ingestForm.source} onChange={event => setIngestForm(current => ({ ...current, source: event.target.value as 'krx' | 'fdr' | 'alphasquare' }))}>
+            <option value="krx">krx (기본)</option>
+            <option value="fdr">fdr (전종목 스냅샷 대체, 주식만)</option>
+            <option value="alphasquare">alphasquare (종목별 개별 조회, 최후 폴백, 수집 기간 그대로 적용)</option>
+          </select></label>
+          <label className="check"><input type="checkbox" checked={ingestForm.force} onChange={event => setIngestForm(current => ({ ...current, force: event.target.checked }))} />이미 수집된 날짜도 다시 수집(--force)</label>
+          <div className="toolbar">
+            <button className="btn btn--primary" disabled={busy || !!ingestStatus?.running}>{ingestStatus?.running ? '수집 중…' : '수집 시작'}</button>
+            {ingestStatus?.running && <span className="progress-note"><span className="spinner" aria-hidden="true" />{ingestStatus.total ? `${ingestStatus.processed}/${ingestStatus.total} · ${ingestStatus.current_day || ''}` : '진행 중…'}</span>}
+          </div>
+          {feedback(ingestMsg)}
+          {!ingestStatus?.running && ingestStatus?.finished_at && (
+            ingestStatus.ok
+              ? <span className="msg" data-tone="ok">마지막 수집 완료 ({ingestStatus.finished_at})</span>
+              : <span className="msg" data-tone="error">마지막 수집 실패: {ingestStatus.error}</span>
+          )}
+        </form>
+      </section>
+  
+      <section className="panel settings-card">
+        <div className="section-title">환경 정보</div>
+        <table className="table table--kv"><tbody>
+          <tr><td>MSCR_HOME</td><td>{settings.mscr_home}</td></tr>
+          <tr><td>데이터베이스</td><td>{settings.db_path}</td></tr>
+          <tr><td>스키마 버전</td><td>{settings.schema_version}</td></tr>
+          <tr><td>기준일</td><td>{settings.data.as_of || '—'}</td></tr>
+          <tr><td>일봉 행 수</td><td>{settings.data.bars_rows.toLocaleString('ko-KR')}</td></tr>
+          <tr><td>종목 수</td><td>주식 {settings.data.instrument_count.stock.toLocaleString('ko-KR')} · ETF {settings.data.instrument_count.etf.toLocaleString('ko-KR')}</td></tr>
+          <tr><td>최근 수집</td><td>{settings.data.last_ingest_at || '—'}</td></tr>
+        </tbody></table>
+      </section>
+    </div>
   </div>;
 }

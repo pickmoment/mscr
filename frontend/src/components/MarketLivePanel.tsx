@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { api, LiveFeaturedRow, LiveFeaturedSection, LiveIndustryRow, LiveIssueRow, LiveMarketStat, LiveNewsRow, LiveThemeRow, LiveThemeStock, LiveTrendingRow, MarketLiveOverview } from '../lib/api';
 import { compactVolume, won } from '../lib/format';
 import { SelectTicker } from '../lib/nav';
+import ViewHeader from './ViewHeader';
 
 const fmtPct2 = (value: number | null | undefined) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 const changeClass = (value: number | null | undefined) => value == null ? '' : value > 0 ? 'change-up' : value < 0 ? 'change-down' : '';
@@ -182,12 +183,15 @@ export default function MarketLivePanel({ onSelect }: { onSelect: SelectTicker }
   useEffect(() => { load(); }, []);
 
   return <div className="page">
-    <div className="page-head">
-      <h1>현재 시황</h1>
-      <button type="button" className="btn btn--ghost" disabled={loading} onClick={load}>새로고침</button>
-      {loading && <span className="progress-note"><span className="spinner" aria-hidden="true" />조회 중…</span>}
-      {updatedAt && <span className="subtle">갱신 {updatedAt}</span>}
-    </div>
+    <ViewHeader
+      title="현재 시황"
+      lede={<>alphasquare의 비공식 API로 읽는 <b>지금 이 순간</b>의 시황입니다. 로컬 DB와 무관하며 새로고침할 때만 조회합니다.</>}
+      actions={<>
+        <button type="button" className="btn btn--ghost" disabled={loading} onClick={load}>새로고침</button>
+        {loading && <span className="progress-note"><span className="spinner" aria-hidden="true" />조회 중…</span>}
+        {updatedAt && <span className="subtle">갱신 {updatedAt}</span>}
+      </>}
+    />
     <p className="hint">alphasquare.co.kr의 비공식 내부 API를 사용합니다 — 공식 데이터가 아니므로 참고용으로만 활용하세요. 자동 갱신 없이 새로고침 버튼으로만 조회합니다.</p>
     {status && <div className="msg" data-tone="error">{status}</div>}
 
