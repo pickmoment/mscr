@@ -108,8 +108,9 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
         <button className="btn btn--ghost btn--sm btn--icon" disabled={!hasNext} onClick={() => hasNext && onSelect(tickers[index + 1], tickers)} aria-label="다음 종목 (→)" title={hasNext ? `다음: ${tickers[index + 1]} (→)` : '목록의 마지막 종목입니다'}>▶</button>
       </div>
       <div className="quote-id">
-        <div className="section-title">{detail.kind.toUpperCase()} · {detail.market || detail.category || 'ETF'}</div>
-        <div className="name"><strong>{detail.name}</strong><a className="mono muted" href={`https://stock.naver.com/domestic/stock/${detail.ticker}/price`} target="_blank" rel="noopener noreferrer">{detail.ticker}</a></div>
+        <strong>{detail.name}</strong>
+        <a className="mono muted" href={`https://stock.naver.com/domestic/stock/${detail.ticker}/price`} target="_blank" rel="noopener noreferrer">{detail.ticker}</a>
+        <span className="quote-tag">{detail.kind.toUpperCase()} · {detail.market || detail.category || 'ETF'}</span>
       </div>
       <strong className="quote-price mono">{won(detail.quote.close as number)}</strong>
       <strong className={`quote-change ${(detail.quote.change_pct as number) >= 0 ? 'up' : 'down'}`}>{detail.quote.change_pct == null ? '—' : `${Number(detail.quote.change_pct).toFixed(2)}%`}</strong>
@@ -117,12 +118,12 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
         <span>거래대금 {won(detail.quote.value as number)}</span>
         <span>RSI({config.rsiPeriod}) {ratio(latestRsi)}</span>
         <span title="최근 3·6·9·12개월 누적수익률 가중평균(0.4/0.2/0.2/0.2)">가중수익률 {detail.quote.weighted_return == null ? '—' : `${Number(detail.quote.weighted_return).toFixed(1)}%`}</span>
+        <span title="시세 기준일">기준 {detail.as_of || '—'}</span>
       </div>
       <div className="toolbar toolbar--tight push">
         {watchMessage && <span className="subtle">{watchMessage}</span>}
-        {lists.length > 1 && <select className="w-md" value={listId ?? ''} aria-label="관심목록 선택" onChange={event => setListId(Number(event.target.value))}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</select>}
-        <button className="btn btn--ghost" aria-pressed={watched} onClick={toggleWatch} title={watched ? '관심목록에서 빼기' : '관심목록에 담기'}>{watched ? '★ 관심' : '☆ 관심'}</button>
-        <span className="badge">{detail.as_of || '—'} 기준</span>
+        {lists.length > 1 && <select className="w-sm" value={listId ?? ''} aria-label="관심목록 선택" onChange={event => setListId(Number(event.target.value))}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</select>}
+        <button className="btn btn--ghost btn--sm" aria-pressed={watched} onClick={toggleWatch} title={watched ? '관심목록에서 빼기' : '관심목록에 담기'}>{watched ? '★ 관심' : '☆ 관심'}</button>
       </div>
     </div>
     <div className="panel chart-box">
