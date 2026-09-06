@@ -67,4 +67,48 @@ def snapshot(path=None) -> dict[str, Any]:
     for row in output: row["weight"] = row["market_value"] / total_market_value if total_market_value else 0
     total_unrealized = total_market_value - total_cost
     cash = float(cash_row[0]) if cash_row else 0.0
+
+
     return {"positions": output, "total_market_value": total_market_value, "total_cost": total_cost, "total_unrealized": total_unrealized, "total_unrealized_pct": total_unrealized / total_cost if total_cost else None, "total_realized": realized, "total_day_change": total_day_change, "cash_krw": cash, "total_assets": total_market_value + cash, "stale": stale_any}
+
+
+RECONCILE_TOLERANCE = 1e-6
+
+
+def reconcile(broker, path=None) -> dict[str, Any]:
+    """로컬 trades 리플레이 포지션을 브로커의 실제 잔고 조회 결과와 대조한다.
+
+    앱을 거치지 않은 수동 주문, `mscr trade sync`를 깜빡한 체결, DB 유실 등으로 로컬 상태가
+    실제 계좌와 어긋나도 지금까지는 감지할 방법이 없었다 — `KISBroker.balance()`는 구현돼
+    있었지만 어디서도 호출되지 않았다. 여기서 그 값을 실제로 대조에 쓴다.
+
+    현금은 대조하지 않는다: `cash_krw`는 사용자가 화면에서 직접 입력하는 값이라(증거금·예수금
+    정산 시점이 다를 수 있음) 브로커 현금과 다른 게 정상일 수 있다 — 오류로 취급하지 않고
+    양쪽 값을 그대로 보여주기만 한다.
+    """
+    local = snapshot(path)
+    remote = broker.balance()
+    remote_by_ticker = {row["ticker"]: row for row in remote["positions"]}
+    local_by_ticker = {row["ticker"]: row for row in local["positions"]}
+    tickers = sorted(set(local_by_ticker) | set(remote_by_ticker))
+    with db_session(path) as db:
+        names = {row["ticker"]: row["name"] for row in db.execute(
+            f"SELECT ticker,name FROM instruments WHERE ticker IN ({','.join('?' * len(tickers))})", tickers).fetchall()} if tickers else {}
+    rows = []
+    for ticker in tickers:
+        local_row, remote_row = local_by_ticker.get(ticker), remote_by_ticker.get(ticker)
+        local_qty = local_row["quantity"] if local_row else 0.0
+        broker_qty = remote_row["quantity"] if remote_row else 0.0
+        rows.append({
+            "ticker": ticker, "name": names.get(ticker, ticker),
+            "local_quantity": local_qty, "broker_quantity": broker_qty, "quantity_diff": local_qty - broker_qty,
+            "local_avg_cost": local_row["avg_cost"] if local_row else None,
+            "broker_avg_cost": remote_row["avg_cost"] if remote_row else None,
+            "matched": abs(local_qty - broker_qty) <= RECONCILE_TOLERANCE,
+        })
+    mismatched = [row for row in rows if not row["matched"]]
+    return {
+        "env": broker.env, "account_masked": broker.account_masked,
+        "positions": rows, "mismatched": len(mismatched),
+        "local_cash_krw": local["cash_krw"], "broker_cash_krw": remote["cash_krw"],
+    }

@@ -294,6 +294,110 @@ def run_plans(broker=None, dry_run: bool = True, plan_ids: list[int] | None = No
     return recorded
 
 
+def simulate_plan(plan_id: int, start: str, end: str, path=None) -> dict[str, Any]:
+    """계획을 실제로 걸지 않고 [start, end] 구간 일봉으로 진입→익절1→익절2→트레일링 전이를 재생한다.
+
+    run_plans의 모의 실행은 오늘 하루치 저장된 상태만 보므로, 진입이 한 번도 체결로 기록된 적 없는
+    계획은 청산 로직에 영원히 도달하지 못한다(entry_done이 항상 False라 _plan_evaluation이 진입
+    단계에서 조기 반환한다). 여기서는 계획 파라미터로 과거 일봉을 순회하며 진입·청산 상태를 이
+    함수 호출 안에서만 들고 재생하므로, 한 번도 체결한 적 없는 계획이라도 "이 기간에 걸었으면
+    지금 어디까지 갔을지"를 미리 볼 수 있다. DB에는 아무것도 쓰지 않는다.
+
+    하루에는 전이(진입/손절/1차/2차/트레일링) 하나만 반영한다 — 한 봉 안에서 여러 레그가 겹쳐
+    닿아도 그 순서를 일봉만으로는 알 수 없기 때문이다. 손절이 최우선이라는 순서는 evaluate_plans와
+    동일하게 지킨다.
+    """
+    if start > end: raise ValueError("시작일은 종료일보다 앞서야 합니다")
+    with db_session(path) as db:
+        row = db.execute("SELECT * FROM trade_plans WHERE id=?", (int(plan_id),)).fetchone()
+        if row is None: raise ValueError("계획을 찾을 수 없습니다")
+        plan = _plan(row)
+        bars = [dict(r) for r in db.execute(
+            "SELECT date,high,low,close FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=? AND date<=? ORDER BY date",
+            (plan["ticker"], start, end)).fetchall()]
+
+    long = plan["side"] == "buy"
+    direction = 1.0 if long else -1.0
+    quantity = float(plan["quantity"])
+    entry_price, stop_price = float(plan["entry_price"]), float(plan["stop_price"])
+    tp1_price, tp2_price, trailing_pct = float(plan["tp1_price"]), float(plan["tp2_price"]), float(plan["tp3_trailing_pct"])
+    tp1_qty, tp2_qty, _trailing_qty = _leg_quantities(quantity, plan["tp1_ratio"], plan["tp2_ratio"])
+    r_unit = abs(entry_price - stop_price)
+
+    legs: list[dict[str, Any]] = []
+    phase = "waiting_entry"
+    tp1_done = tp2_done = False
+    trailing_extreme: float | None = None
+
+    for bar in bars:
+        if phase == "waiting_entry":
+            hit = bar["high"] >= entry_price if long else bar["low"] <= entry_price
+            if hit:
+                legs.append({"leg": "entry", "date": bar["date"], "price": entry_price, "quantity": quantity})
+                phase = "holding"
+            continue
+        remaining = quantity - (tp1_qty if tp1_done else 0.0) - (tp2_qty if tp2_done else 0.0)
+        stop_hit = bar["low"] <= stop_price if long else bar["high"] >= stop_price
+        if stop_hit:
+            legs.append({"leg": "stop", "date": bar["date"], "price": stop_price, "quantity": remaining})
+            phase = "closed"
+            break
+        tp1_pending, tp2_pending = not tp1_done and tp1_qty > 0, not tp2_done and tp2_qty > 0
+        if tp1_pending:
+            hit = bar["high"] >= tp1_price if long else bar["low"] <= tp1_price
+            if hit:
+                legs.append({"leg": "tp1", "date": bar["date"], "price": tp1_price, "quantity": tp1_qty})
+                tp1_done = True
+                trailing_extreme = bar["high"] if long else bar["low"]
+                phase = "tp1_done"
+            continue
+        if tp2_pending:
+            hit = bar["high"] >= tp2_price if long else bar["low"] <= tp2_price
+            if hit:
+                legs.append({"leg": "tp2", "date": bar["date"], "price": tp2_price, "quantity": tp2_qty})
+                tp2_done = True
+                trailing_extreme = bar["high"] if long else bar["low"]
+                phase = "trailing"
+            continue
+        # 트레일링 단계 — 마지막으로 채워진 레그의 날부터 극값을 계속 갱신한다(_trailing_reference와 같은 규약).
+        trailing_extreme = max(trailing_extreme, bar["high"]) if long else min(trailing_extreme, bar["low"])
+        trail_level = trailing_extreme * (1 - trailing_pct / 100) if long else trailing_extreme * (1 + trailing_pct / 100)
+        hit = bar["low"] <= trail_level if long else bar["high"] >= trail_level
+        if hit:
+            legs.append({"leg": "trailing", "date": bar["date"], "price": trail_level, "quantity": remaining})
+            phase = "closed"
+            break
+        phase = "trailing"
+
+    entered = any(leg["leg"] == "entry" for leg in legs)
+    last_close = float(bars[-1]["close"]) if bars else None
+    position_r = r_unit * quantity
+    realized_krw = realized_r = open_quantity = open_r = total_r = None
+    if entered:
+        exit_legs = [leg for leg in legs if leg["leg"] != "entry"]
+        realized_krw = sum((leg["price"] - entry_price) * leg["quantity"] * direction for leg in exit_legs)
+        realized_r = realized_krw / position_r if position_r else None
+        exited_quantity = sum(leg["quantity"] for leg in exit_legs)
+        open_quantity = 0.0 if phase == "closed" else max(0.0, quantity - exited_quantity)
+        open_r = (last_close - entry_price) * open_quantity * direction / position_r if open_quantity > 0 and last_close is not None and position_r else None
+        total_r = None if realized_r is None and open_r is None else (realized_r or 0.0) + (open_r or 0.0)
+
+    warnings: list[str] = []
+    if not bars: warnings.append("구간에 일봉이 없습니다")
+    elif not entered: warnings.append("구간 안에서 진입가에 도달하지 않았습니다")
+    elif phase != "closed": warnings.append("구간이 끝날 때까지 청산되지 않았습니다 — 종료일 이후는 반영되지 않습니다")
+
+    return {
+        "plan_id": plan["id"], "name": plan["name"], "ticker": plan["ticker"], "side": plan["side"],
+        "start": start, "end": end, "bars": len(bars),
+        "entry_price": entry_price, "stop_price": stop_price, "r_unit": r_unit,
+        "phase": phase, "entered": entered, "legs": legs,
+        "realized_krw": realized_krw, "realized_r": realized_r,
+        "open_quantity": open_quantity, "open_r": open_r, "total_r": total_r,
+        "last_close": last_close, "warnings": warnings,
+    }
+
+
 def _record_fill(db, order_id: int) -> int | None:
     row = db.execute("SELECT * FROM broker_orders WHERE id=?", (order_id,)).fetchone()
     if row is None: raise ValueError("주문을 찾을 수 없습니다")

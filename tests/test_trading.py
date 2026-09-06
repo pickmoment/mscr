@@ -6,8 +6,8 @@ import pytest
 
 from mscr.broker.kis import Fill, KISBroker, KISError, OrderResult, broker_from_config, broker_status, clear_credentials, save_credentials, set_active_env
 from mscr.db import db_session, init_db
-from mscr.portfolio import snapshot
-from mscr.trading import _leg_quantities, delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, sync_orders
+from mscr.portfolio import reconcile, snapshot
+from mscr.trading import _leg_quantities, delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, simulate_plan, sync_orders
 
 
 class StubBroker:
@@ -49,6 +49,20 @@ class SequentialFillBroker:
     def order_fill(self, broker_order_id, order_date=None):
         quantity, price = self._orders[broker_order_id]
         return Fill(quantity, price, 0.0, 0.0, "filled", {"rt_cd": "0"})
+
+
+class BalanceStubBroker:
+    """`.balance()`만 흉내 낸다 — 대조 대상은 실제 API 응답 형태(ticker/quantity/avg_cost, cash_krw)만 있으면 된다."""
+
+    env = "paper"
+    account_masked = "1234****-01"
+
+    def __init__(self, positions, cash_krw=0.0):
+        self._positions = positions
+        self._cash_krw = cash_krw
+
+    def balance(self):
+        return {"positions": self._positions, "cash_krw": self._cash_krw}
 
 
 def insert_bar(db, ticker, day, o, h, l, c, volume=1000, value=1_000_000):
@@ -539,3 +553,106 @@ def test_kis_submit_order_rounds_quantity_and_rejects_zero_shares(monkeypatch, t
     with pytest.raises(KISError, match="0주 이하"):
         broker.submit_order("005930", "sell", 0.4, "market", None)
     assert len(calls) == 1
+
+
+def test_simulate_plan_replays_entry_and_stop_without_persisting(store):
+    save_plan(plan_payload(entry_price=1050, stop_price=1000), store)
+    plan_id = list_plans(store)[0]["id"]
+    with db_session(store) as db:
+        insert_bar(db, "005930", "2026-06-02", 1040, 1060, 1030, 1055)  # 진입 트리거
+        insert_bar(db, "005930", "2026-06-03", 1010, 1020, 995, 1005)  # 손절 이탈
+    result = simulate_plan(plan_id, "2026-06-01", "2026-06-03", store)
+    assert result["phase"] == "closed"
+    assert [leg["leg"] for leg in result["legs"]] == ["entry", "stop"]
+    assert [leg["date"] for leg in result["legs"]] == ["2026-06-02", "2026-06-03"]
+    assert result["realized_r"] == pytest.approx(-1.0)
+    assert list_orders(path=store) == []  # 모의 실행과 달리 여기서도 broker_orders에는 아무것도 안 남는다
+
+
+def test_simulate_plan_walks_full_leg_chain_even_though_never_actually_entered(store):
+    """run_plans의 dry_run은 진입이 기록된 적 없으면 청산 로직에 절대 못 간다. 여기는 그 반대를 증명한다:
+    실제 체결이 한 번도 없어도(list_orders는 끝까지 비어 있다) 과거 구간만으로 진입→1차→2차→트레일링을 완주한다."""
+    save_plan(plan_payload(entry_price=1050, stop_price=1000, tp1_price=1100, tp1_ratio=0.4, tp2_price=1200, tp2_ratio=0.3, tp3_trailing_pct=5), store)
+    plan_id = list_plans(store)[0]["id"]
+    with db_session(store) as db:
+        insert_bar(db, "005930", "2026-06-02", 1040, 1060, 1030, 1055)  # 진입
+        insert_bar(db, "005930", "2026-06-03", 1060, 1110, 1055, 1105)  # 1차 익절
+        insert_bar(db, "005930", "2026-06-04", 1110, 1210, 1105, 1200)  # 2차 익절
+        insert_bar(db, "005930", "2026-06-05", 1200, 1250, 1190, 1240)  # 트레일링 극값 갱신, 아직 이탈 아님
+        insert_bar(db, "005930", "2026-06-08", 1240, 1245, 1180, 1185)  # 트레일링 이탈(1250*0.95=1187.5)
+    result = simulate_plan(plan_id, "2026-06-01", "2026-06-08", store)
+    assert [leg["leg"] for leg in result["legs"]] == ["entry", "tp1", "tp2", "trailing"]
+    assert result["legs"][-1]["date"] == "2026-06-08"
+    assert result["phase"] == "closed"
+    assert result["total_r"] is not None
+    assert list_orders(path=store) == []
+
+
+def test_simulate_plan_reports_untriggered_range_and_missing_bars(store):
+    save_plan(plan_payload(entry_price=1050, stop_price=1000), store)
+    plan_id = list_plans(store)[0]["id"]
+    with db_session(store) as db:
+        insert_bar(db, "005930", "2026-06-02", 1000, 1010, 995, 1005)
+    never_triggered = simulate_plan(plan_id, "2026-06-01", "2026-06-02", store)
+    assert (never_triggered["phase"], never_triggered["entered"], never_triggered["legs"]) == ("waiting_entry", False, [])
+    assert never_triggered["realized_r"] is None and never_triggered["open_r"] is None and never_triggered["total_r"] is None
+    assert "진입가에 도달하지 않았습니다" in never_triggered["warnings"][0]
+
+    no_bars = simulate_plan(plan_id, "2020-01-01", "2020-01-02", store)
+    assert no_bars["bars"] == 0
+    assert "일봉이 없습니다" in no_bars["warnings"][0]
+
+
+def test_simulate_plan_rejects_inverted_range_and_missing_plan(store):
+    save_plan(plan_payload(), store)
+    plan_id = list_plans(store)[0]["id"]
+    with pytest.raises(ValueError, match="시작일은 종료일보다 앞서야 합니다"):
+        simulate_plan(plan_id, "2026-06-02", "2026-06-01", store)
+    with pytest.raises(ValueError, match="계획을 찾을 수 없습니다"):
+        simulate_plan(plan_id + 999, "2026-06-01", "2026-06-02", store)
+
+
+def test_simulate_plan_short_side_direction_mirrors_long(store):
+    save_plan(plan_payload(side="sell", entry_price=1000, stop_price=1050, tp1_price=950, tp1_ratio=0.4, tp2_price=900, tp2_ratio=0.3, tp3_trailing_pct=5), store)
+    plan_id = list_plans(store)[0]["id"]
+    with db_session(store) as db:
+        insert_bar(db, "005930", "2026-06-02", 1010, 1020, 995, 1000)  # 진입(저가가 진입가 이하로 하락)
+        insert_bar(db, "005930", "2026-06-03", 990, 995, 940, 945)  # 1차 익절(저가가 1차 목표가 이하)
+    result = simulate_plan(plan_id, "2026-06-01", "2026-06-03", store)
+    assert [leg["leg"] for leg in result["legs"]] == ["entry", "tp1"]
+    assert result["realized_r"] == pytest.approx((1000 - 950) * 4 / (50 * 10))
+
+
+def _enter_live_position(store, broker) -> None:
+    """005930 10주를 실제 브로커 경로(제출→동기화)로 체결시켜 로컬 trades/포지션을 만든다."""
+    save_plan(plan_payload(), store)
+    run_plans(broker=broker, dry_run=False, path=store)
+    sync_orders(broker=broker, path=store)
+
+
+def test_reconcile_matches_when_broker_balance_agrees_with_local_position(store):
+    _enter_live_position(store, StubBroker())
+    result = reconcile(BalanceStubBroker([{"ticker": "005930", "quantity": 10.0, "avg_cost": 1319.0}], 100000.0), store)
+    assert result["mismatched"] == 0
+    assert result["positions"] == [{
+        "ticker": "005930", "name": "삼성전자", "local_quantity": 10.0, "broker_quantity": 10.0,
+        "quantity_diff": 0.0, "local_avg_cost": pytest.approx(1319.0), "broker_avg_cost": 1319.0, "matched": True,
+    }]
+    assert (result["local_cash_krw"], result["broker_cash_krw"]) == (0.0, 100000.0)  # 현금은 판정하지 않고 그대로 보여주기만 한다
+
+
+def test_reconcile_flags_quantity_drift_against_broker_balance(store):
+    _enter_live_position(store, StubBroker())
+    # 브로커 실계좌는 8주뿐이다 — 앱을 거치지 않은 수동 매도 등으로 로컬(10주)과 어긋난 상황.
+    result = reconcile(BalanceStubBroker([{"ticker": "005930", "quantity": 8.0, "avg_cost": 1319.0}]), store)
+    assert result["mismatched"] == 1
+    row = result["positions"][0]
+    assert (row["local_quantity"], row["broker_quantity"], row["quantity_diff"], row["matched"]) == (10.0, 8.0, 2.0, False)
+
+
+def test_reconcile_surfaces_broker_position_missing_from_local_state(store):
+    # 로컬에는 아무 거래도 없는데 브로커 잔고에는 000660이 잡혀 있다 — 앱 밖에서 매수했거나 DB가 유실된 경우.
+    result = reconcile(BalanceStubBroker([{"ticker": "000660", "quantity": 5.0, "avg_cost": 50000.0}]), store)
+    assert result["mismatched"] == 1
+    row = result["positions"][0]
+    assert (row["ticker"], row["local_quantity"], row["broker_quantity"], row["matched"]) == ("000660", 0.0, 5.0, False)

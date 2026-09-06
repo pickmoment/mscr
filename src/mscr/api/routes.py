@@ -17,7 +17,7 @@ from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_N
 from ..indicators import bollinger_bands, macd, rsi, sma
 from .. import market_stats
 from .. import watchlist
-from ..portfolio import replay_trades, snapshot, validate_trade
+from ..portfolio import reconcile, replay_trades, snapshot, validate_trade
 from ..config import DB_PATH, MSCR_HOME, SCHEMA_VERSION, request_delay, request_delay_source
 from ..credentials import load as load_settings
 from ..credentials import path_for
@@ -25,7 +25,7 @@ from ..credentials import save as save_settings
 from ..providers.krx import CREDENTIAL_NAME as krx_credential_name
 from ..providers.krx import KRXProvider, _stock, clear_krx_credentials, krx_status, save_krx_credentials
 from ..screener import FIELDS, run
-from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, sync_orders
+from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, simulate_plan, sync_orders
 from ..autoplan import propose as propose_plan
 from .models import ActiveEnvRequest, BacktestRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, RiskLimitRequest, ScreenRequest, ScreenSaveRequest, SignalCaptureRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
 
@@ -572,6 +572,13 @@ def trading_evaluate():
     except ValueError as exc:
         raise _trading_error(exc) from exc
 
+@router.get("/trading/plans/{plan_id}/simulate")
+def simulate_trading_plan(plan_id: int, start: str = Query(...), end: str = Query(...)):
+    try:
+        return simulate_plan(plan_id, start, end)
+    except ValueError as exc:
+        raise _trading_error(exc) from exc
+
 @router.post("/trading/run")
 def trading_run(request: TradeRunRequest):
     broker = None if request.dry_run else _require_broker()
@@ -591,6 +598,17 @@ def trading_sync():
         raise _trading_error(exc) from exc
     except KISError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+@router.get("/trading/reconcile")
+def trading_reconcile():
+    broker = _require_broker()
+    try:
+        return reconcile(broker)
+    except ValueError as exc:
+        raise _trading_error(exc) from exc
+    except KISError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
 
 @router.get("/trading/orders")
 def trading_orders(limit: int = Query(200, ge=1, le=2000)):

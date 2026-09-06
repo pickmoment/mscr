@@ -237,6 +237,28 @@ def trade_run(live: bool = typer.Option(False, "--live", help="Send real orders 
         typer.echo(f"  #{order.get('id')} {order['ticker']} {order['side']} {order['quantity']:g} {order['order_type']} status={order['status']} broker_order_id={order.get('broker_order_id') or '-'} {order.get('message') or ''}".rstrip())
 
 
+@trade_app.command("simulate")
+def trade_simulate(
+    plan_id: int = typer.Argument(..., help="Plan id (see `mscr trade plans`)."),
+    start: str = typer.Option(..., "--from", help="Start date (YYYY-MM-DD)."),
+    end: str = typer.Option(..., "--to", help="End date (YYYY-MM-DD)."),
+) -> None:
+    """Replay a plan's entry/stop/tp1/tp2/trailing rules over historical daily bars. Nothing is recorded."""
+    init_db()
+    from .trading import simulate_plan
+    try:
+        result = simulate_plan(plan_id, start, end)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{result['name']} {result['ticker']} {result['side']} · {result['start']}~{result['end']} ({result['bars']}일) · phase={result['phase']}")
+    for leg in result["legs"]:
+        typer.echo(f"  {leg['leg']:<8} {leg['date']} {leg['price']:g} x{leg['quantity']:g}")
+    typer.echo(f"realized={_r(result['realized_r'])} open={_r(result['open_r'])} total={_r(result['total_r'])}")
+    for warning in result["warnings"]:
+        typer.echo(f"  ! {warning}")
+
+
 @trade_app.command("sync")
 def trade_sync() -> None:
     """Poll broker fills and record filled orders as trades."""
@@ -251,6 +273,24 @@ def trade_sync() -> None:
     typer.echo(f"synced: {len(orders)}")
     for order in orders:
         typer.echo(f"  #{order.get('id')} {order['ticker']} {order['side']} status={order['status']} filled={order.get('filled_quantity') or 0:g}@{order.get('filled_price') or 0:g} fee={order.get('fee') or 0:g} tax={order.get('tax') or 0:g} trade_id={order.get('trade_id') or '-'}")
+
+
+@trade_app.command("reconcile")
+def trade_reconcile() -> None:
+    """Compare local replayed positions against the broker's real account balance."""
+    init_db()
+    from .portfolio import reconcile
+    broker = _live_broker()
+    try:
+        result = reconcile(broker)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"env={result['env']} account={result['account_masked']} mismatched={result['mismatched']}/{len(result['positions'])}")
+    for row in result["positions"]:
+        mark = "OK" if row["matched"] else "!!"
+        typer.echo(f"  {mark} {row['ticker']} {row['name']} local={row['local_quantity']:g} broker={row['broker_quantity']:g} diff={row['quantity_diff']:+g}")
+    typer.echo(f"cash: local={result['local_cash_krw']:,.0f}원 broker={result['broker_cash_krw']:,.0f}원 (사용자 입력값이라 다를 수 있습니다)")
 
 
 @app.command()

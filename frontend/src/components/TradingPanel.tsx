@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, BrokerOrder, PlanCandidate, PlanEvaluation, PlanProposal, ReviewPlanResult, ReviewStats, RiskHeat, RiskLimits, TradePlan, TradingStatus } from '../lib/api';
+import { api, BrokerOrder, PlanCandidate, PlanEvaluation, PlanProposal, PlanSimulation, ReconcileResult, ReviewPlanResult, ReviewStats, RiskHeat, RiskLimits, TradePlan, TradingStatus } from '../lib/api';
 import { positionFromTradePlan, storePositionPlan } from '../lib/position';
 import { SelectTicker } from '../lib/nav';
 import { won } from '../lib/format';
@@ -10,6 +10,8 @@ const statusLabel: Record<string, string> = { dry_run: '모의', submitted: '접
 const statusTone: Record<string, string | undefined> = { filled: 'ok', rejected: 'danger', failed: 'danger', submitted: 'live', partial: 'live', dry_run: undefined, skipped: undefined };
 const phaseLabel: Record<string, string> = { waiting_entry: '진입 대기', holding: '보유 중', tp1_done: '1차 완료', trailing: '트레일링', closed: '청산 완료' };
 const legLabel: Record<string, string> = { entry: '진입', stop: '손절 청산', tp1: '1차 익절', tp2: '2차 익절', trailing: '트레일링 청산' };
+// 계획 기간 시뮬레이션의 기본 구간 — 오늘, 그리고 그 180일 전.
+const isoDaysAgo = (days: number) => { const date = new Date(); date.setDate(date.getDate() - days); return date.toISOString().slice(0, 10); };
 const num = (value: number | null | undefined) => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 const pct = (value: number | null | undefined) => value == null ? '—' : `${(value * 100).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}%`;
 // 리스크·복기 응답의 *_pct는 이미 0~100 퍼센트라 그대로 찍는다. 위의 pct()는 0~1 비율용이라 섞으면 100배가 어긋난다.
@@ -261,6 +263,13 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
   const [picked, setPicked] = useState<number | null>(null);
   const [heat, setHeat] = useState<RiskHeat | null>(null);
   const [setups, setSetups] = useState<string[]>([]);
+  const [simPlan, setSimPlan] = useState<number | null>(null);
+  const [simRange, setSimRange] = useState<{ start: string; end: string }>({ start: isoDaysAgo(180), end: new Date().toISOString().slice(0, 10) });
+  const [simResult, setSimResult] = useState<PlanSimulation | null>(null);
+  const [simBusy, setSimBusy] = useState(false);
+  const [simError, setSimError] = useState('');
+  const [reconcileResult, setReconcileResult] = useState<ReconcileResult | null>(null);
+  const [reconcileBusy, setReconcileBusy] = useState(false);
   // 자동 생성의 최대 손실 금액은 리스크 한도에서 나온 권장값으로 시작한다. 사용자가 한 번이라도 고치면 그 값을 덮지 않는다.
   const [maxLossTouched, setMaxLossTouched] = useState(false);
   const fail = (error: unknown, fallback: string) => setMessage(error instanceof Error ? error.message : fallback);
@@ -351,6 +360,19 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
     storePositionPlan(plan.ticker, positionFromTradePlan(plan));
     onSelect(plan.ticker, plans.map(item => item.ticker));
   };
+  // 진입이 체결로 기록된 적 없는 계획은 청산 로직에 절대 도달하지 못한다(run_plans의 dry_run은
+  // broker_orders에 아무것도 안 남기므로). 과거 구간을 재생해 진입→청산 전이를 미리 보는 용도다.
+  const toggleSimulate = (plan: TradePlan) => {
+    if (simPlan === plan.id) { setSimPlan(null); return; }
+    setSimPlan(plan.id); setSimResult(null); setSimError('');
+  };
+  const runSimulate = async (plan: TradePlan) => {
+    setSimBusy(true); setSimError('');
+    try { setSimResult(await api.simulatePlan(plan.id, simRange.start, simRange.end)); }
+    catch (error) { setSimResult(null); setSimError(error instanceof Error ? error.message : '시뮬레이션 실패'); }
+    finally { setSimBusy(false); }
+  };
+
 
   const summarize = (rows: BrokerOrder[]) => {
     if (!rows.length) return '조건을 충족한 계획이 없어 주문하지 않았습니다.';
@@ -369,6 +391,10 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
   const sync = async () => {
     setBusy(true);
     try { const rows = await api.syncOrders(); setMessage(rows.length ? `체결 동기화 — ${summarize(rows)}` : '동기화할 미체결 주문이 없습니다.'); loadOrders(); loadPlans(); loadHeat(); window.dispatchEvent(new Event('mscr-trades-changed')); } catch (error) { fail(error, '동기화 실패'); } finally { setBusy(false); }
+  };
+  const runReconcile = async () => {
+    setReconcileBusy(true);
+    try { setReconcileResult(await api.reconcile()); } catch (error) { setReconcileResult(null); fail(error, '잔고 대조 실패'); } finally { setReconcileBusy(false); }
   };
 
   // 리스크·복기는 기존 그리드 밖에 둔다. .trading-layout의 행 크기는 기존 다섯 구획에 맞춰져 있어, 안에 끼워 넣으면 주문 기록 칸이 눌린다.
@@ -390,10 +416,26 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
               {/* 실제 돈이 나가는 버튼은 기본 액션 색을 쓰지 않는다. 모의 실행과 한눈에 구분돼야 한다. */}
               <button className="btn btn--danger" disabled={busy || !status?.enabled} title={status?.enabled ? undefined : status?.reason || '브로커가 설정되지 않았습니다.'} onClick={() => run(false)}>실주문 실행</button>
               <button className="btn btn--ghost" disabled={busy || !status?.enabled} onClick={sync}>체결 동기화</button>
+              <button className="btn btn--ghost" disabled={reconcileBusy || !status?.enabled} title="broker_orders를 거치지 않은 수동 주문이나 동기화 누락으로 로컬 상태가 실제 계좌와 어긋났는지 확인합니다." onClick={runReconcile}>{reconcileBusy ? '대조 중…' : '잔고 대조'}</button>
             </div>
           </div>
           {/* 작업 결과가 있으면 msg, 없으면 계획 건수만 조용히 보여준다. 둘 중 하나는 항상 렌더해 줄이 사라지지 않게 한다. */}
           {message ? <span className="msg">{message}</span> : <div className="subtle">대상 계획 {armed.length}건 / 전체 {plans.length}건</div>}
+          {reconcileResult && <div className="stack">
+            <div className="toolbar toolbar--tight">
+              <span className="badge" data-tone={reconcileResult.mismatched ? 'danger' : 'ok'}>{reconcileResult.env === 'real' ? '실전' : '모의'} {reconcileResult.account_masked} · {reconcileResult.mismatched ? `불일치 ${reconcileResult.mismatched}건` : '일치'}</span>
+              <span className="subtle">현금 — 로컬 {won(reconcileResult.local_cash_krw)} / 브로커 {won(reconcileResult.broker_cash_krw)}(사용자 입력값이라 다를 수 있습니다)</span>
+            </div>
+            {!!reconcileResult.positions.length && <table className="table table--nowrap table--rows">
+              <thead><tr><th>종목</th><th className="num">로컬 수량</th><th className="num">브로커 수량</th><th className="num">차이</th></tr></thead>
+              <tbody>{reconcileResult.positions.map(row => <tr key={row.ticker} data-tone={row.matched ? undefined : 'danger'}>
+                <td>{row.name}<span className="subtle mono"> {row.ticker}</span></td>
+                <td className="num">{num(row.local_quantity)}</td>
+                <td className="num">{num(row.broker_quantity)}</td>
+                <td className={`num ${row.matched ? 'subtle' : 'down'}`}>{row.quantity_diff > 0 ? '+' : ''}{num(row.quantity_diff)}</td>
+              </tr>)}</tbody>
+            </table>}
+          </div>}
         </section>
   
         <section className="panel autoplan-panel">
@@ -521,7 +563,32 @@ export default function TradingPanel({ onSelect }: { onSelect: SelectTicker }) {
                 <span className="subtle">{evaluation?.as_of || '기준일 없음'} · 종가 {won(evaluation?.close ?? null)}</span>
               </div>
               {plan.note && <div className="subtle">{plan.note}</div>}
-              <div className="toolbar toolbar--tight"><button className="btn btn--ghost btn--sm" onClick={() => showOnChart(plan)} title="계획의 가격을 종목 상세 차트에 블록으로 띄웁니다">차트에서 보기</button><button className="btn btn--ghost btn--sm" onClick={() => edit(plan)}>편집</button><button className="btn btn--danger btn--sm" onClick={() => remove(plan)}>삭제</button></div>
+              <div className="toolbar toolbar--tight"><button className="btn btn--ghost btn--sm" onClick={() => showOnChart(plan)} title="계획의 가격을 종목 상세 차트에 블록으로 띄웁니다">차트에서 보기</button><button className="btn btn--ghost btn--sm" onClick={() => edit(plan)}>편집</button><button className="btn btn--ghost btn--sm" onClick={() => toggleSimulate(plan)} title="진입이 실제로 체결된 적 없어도, 과거 구간의 일봉으로 진입→청산 전이를 재생해 봅니다.">{simPlan === plan.id ? '기간 시뮬레이션 닫기' : '기간 시뮬레이션'}</button><button className="btn btn--danger btn--sm" onClick={() => remove(plan)}>삭제</button></div>
+              {simPlan === plan.id && <div className="plan-sim stack">
+                <div className="toolbar toolbar--tight">
+                  <label className="subtle">시작 <input type="date" value={simRange.start} max={simRange.end} onChange={event => setSimRange(current => ({ ...current, start: event.target.value }))} /></label>
+                  <label className="subtle">종료 <input type="date" value={simRange.end} min={simRange.start} onChange={event => setSimRange(current => ({ ...current, end: event.target.value }))} /></label>
+                  <button className="btn btn--primary btn--sm" disabled={simBusy} onClick={() => runSimulate(plan)}>재생</button>
+                </div>
+                {simError && <div className="msg" data-tone="error">{simError}</div>}
+                {simResult && simResult.plan_id === plan.id && <>
+                  <div className="toolbar toolbar--tight">
+                    <span className="badge">{phaseLabel[simResult.phase] || simResult.phase}</span>
+                    <span className="subtle">{simResult.bars}봉 재생 · {simResult.start} ~ {simResult.end}</span>
+                  </div>
+                  {!!simResult.legs.length && <table className="table table--nowrap table--rows">
+                    <thead><tr><th>레그</th><th>날짜</th><th className="num">가격</th><th className="num">수량</th></tr></thead>
+                    <tbody>{simResult.legs.map((leg, index) => <tr key={index}>
+                      <td>{legLabel[leg.leg] || leg.leg}</td>
+                      <td className="mono">{leg.date}</td>
+                      <td className="num">{won(leg.price)}</td>
+                      <td className="num">{num(leg.quantity)}</td>
+                    </tr>)}</tbody>
+                  </table>}
+                  <div className="subtle">실현 {rMultiple(simResult.realized_r)} · 미실현 {rMultiple(simResult.open_r)} · 합계 {rMultiple(simResult.total_r)}</div>
+                  {simResult.warnings.map(warning => <div className="msg" data-tone="warn" key={warning}>{warning}</div>)}
+                </>}
+              </div>}
             </article>;
           })}
           {!plans.length && <div className="empty">등록된 트레이딩 계획이 없습니다.</div>}

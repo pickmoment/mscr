@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, BarsResponse, ChartIndicatorParams, Instrument, Watchlist } from '../lib/api';
+import { api, BarsResponse, ChartBar, ChartIndicatorParams, Instrument, Watchlist } from '../lib/api';
 import TickerChart from './TickerChart';
 import { ratio, won } from '../lib/format';
 import PositionPlanner from './PositionPlanner';
@@ -30,6 +30,8 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const [listId, setListId] = useState<number | null>(null);
   const [watchMessage, setWatchMessage] = useState('');
   const [plan, setPlan] = useState<PositionPlan | null>(null);
+  const [measuring, setMeasuring] = useState(false);
+  const [viewportLastBar, setViewportLastBar] = useState<ChartBar | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const loadLists = useCallback(() => {
     if (!ticker) return;
@@ -77,8 +79,10 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const hasPrev = index > 0;
   const hasNext = index >= 0 && index < tickers.length - 1;
   const watched = lists.find(list => list.id === listId)?.contains ?? false;
-  // 보유 중이면 평단이 진입가다. 이미 잡은 포지션의 손절·청산을 그대로 그려 볼 수 있어야 한다.
-  const basePrice = detail.position?.avg_cost || Number(detail.quote.close) || 0;
+  // 보유 중이면 평단이 진입가다 — 이미 잡은 포지션의 손절·청산을 그대로 그려 볼 수 있어야 한다.
+  // 보유 중이 아니면 지금 차트에 실제로 표시된(줌·스크롤 반영) 영역의 마지막 봉 종가를 쓴다.
+  // 차트를 아직 못 불러왔을 때만 시세 종가로 대체한다.
+  const basePrice = detail.position?.avg_cost || viewportLastBar?.close || Number(detail.quote.close) || 0;
   const freshPlan = () => defaultPlan(basePrice, detail.kind, detail.position?.quantity ?? 0);
   const toggleWatch = async () => {
     try {
@@ -117,8 +121,8 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
       </div>
     </div>
     <div className="panel chart-box">
-      <div className="toolbar"><div className="segmented">{['3m','6m','1y','3y','max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>)}</div><button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><span className="subtle push">{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
-      <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} /></div>
+      <div className="toolbar"><div className="segmented">{['3m','6m','1y','3y','max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>)}</div><button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><button className="btn btn--ghost" aria-pressed={measuring} onClick={() => setMeasuring(current => !current)} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">구간 측정</button><span className="subtle push">{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
+      <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} measuring={measuring} onLastBarChange={setViewportLastBar} /></div>
     </div></div><aside className="panel sidebar scroll">{plan && <PositionPlanner plan={plan} ticker={detail.ticker} name={detail.name} kind={detail.kind} onChange={savePlan} onReset={() => savePlan(freshPlan())} onClose={() => savePlan(null)} />}<div className="toolbar"><div className="section-title">지표 설정</div><button className="btn btn--quiet btn--sm push" aria-expanded={showParams} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>
     {showParams && <>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('ma')} onChange={() => toggle('ma')} />이동평균</label><div className="parameter-inputs">{config.maPeriods.map((period, index) => <input key={index} aria-label={`이동평균 기간 ${index + 1}`} type="number" min="1" value={period} onChange={event => setConfig(current => ({ ...current, maPeriods: current.maPeriods.map((value, position) => position === index ? Number(event.target.value) : value) }))} />)}</div></div>

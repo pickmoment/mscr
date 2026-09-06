@@ -428,6 +428,9 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 
 .btn--ghost { border-color: var(--line-2); background: var(--surface-2); color: var(--text-2); }
 .btn--ghost:hover:not(:disabled) { border-color: var(--text-3); color: var(--text); background: var(--surface-hover); }
+/* "포지션"·"구간 측정"처럼 켜고 끄는 토글 버튼임을 색으로 구분한다. */
+.btn--ghost[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.btn--ghost[aria-pressed='true']:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 80%, var(--accent) 20%); }
 
 .btn--quiet { color: var(--text-3); }
 .btn--quiet:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
@@ -635,7 +638,17 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 
 .chart-box { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); min-height: 0; }
 .chart-canvas { flex: 1; min-height: 0; position: relative; }
-.chart-legend { position: absolute; z-index: 2; top: var(--s2); left: var(--s4); pointer-events: none; }
+.chart-legend {
+  position: absolute; z-index: 2; top: var(--s2); left: var(--s2); pointer-events: none;
+  display: flex; flex-direction: column; gap: var(--s1);
+  padding: var(--s2) var(--s3);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--r1);
+  backdrop-filter: blur(3px);
+}
+.legend-row { display: flex; align-items: center; gap: var(--s2); font: 12px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-2); }
+.legend-field i { font-style: normal; color: var(--text-3); margin-right: 3px; }
 
 .sidebar { padding: var(--s5); display: grid; gap: var(--s3); align-content: start; }
 
@@ -735,6 +748,7 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 .plan-head strong { font-size: 14px; }
 .plan-head code { color: var(--text-3); font: 12px var(--font-mono); }
 .plan-eval { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: baseline; font-size: 12px; }
+.plan-sim { padding-top: var(--s3); border-top: 1px dashed var(--line); }
 
 .code-note {
   padding: var(--s3);
