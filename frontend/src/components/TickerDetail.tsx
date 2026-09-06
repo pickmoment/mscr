@@ -79,7 +79,18 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   </div>;
   if (!detail) return <div className="panel empty">종목 정보를 불러오는 중…</div>;
   const toggle = (key: string) => setEnabled(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
-  const latestRsi = chart?.rsi?.at(-1)?.value;
+  // 우측 시세 표. 세 번째 원소는 설명이 필요한 항목의 툴팁.
+  const quoteRows: [string, string, string?][] = [
+    ['시가', won(detail.quote.open as number)],
+    ['고가', won(detail.quote.high as number)],
+    ['저가', won(detail.quote.low as number)],
+    ['거래량', Number(detail.quote.volume || 0).toLocaleString()],
+    ['거래대금', won(detail.quote.value as number)],
+    ['시가총액', won(detail.fundamental.market_cap)],
+    ['PER', ratio(detail.fundamental.per)],
+    ['PBR', ratio(detail.fundamental.pbr)],
+    ['가중수익률', detail.quote.weighted_return == null ? '—' : `${Number(detail.quote.weighted_return).toFixed(1)}%`, '최근 3·6·9·12개월 누적수익률 가중평균(0.4/0.2/0.2/0.2)'],
+  ];
   const index = ticker ? tickers.indexOf(ticker) : -1;
   const hasPrev = index > 0;
   const hasNext = index >= 0 && index < tickers.length - 1;
@@ -114,12 +125,6 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
       </div>
       <strong className="quote-price mono">{won(detail.quote.close as number)}</strong>
       <strong className={`quote-change ${(detail.quote.change_pct as number) >= 0 ? 'up' : 'down'}`}>{detail.quote.change_pct == null ? '—' : `${Number(detail.quote.change_pct).toFixed(2)}%`}</strong>
-      <div className="quote-facts">
-        <span>거래대금 {won(detail.quote.value as number)}</span>
-        <span>RSI({config.rsiPeriod}) {ratio(latestRsi)}</span>
-        <span title="최근 3·6·9·12개월 누적수익률 가중평균(0.4/0.2/0.2/0.2)">가중수익률 {detail.quote.weighted_return == null ? '—' : `${Number(detail.quote.weighted_return).toFixed(1)}%`}</span>
-        <span title="시세 기준일">기준 {detail.as_of || '—'}</span>
-      </div>
       <div className="toolbar toolbar--tight push">
         {watchMessage && <span className="subtle">{watchMessage}</span>}
         {lists.length > 1 && <select className="w-sm" value={listId ?? ''} aria-label="관심목록 선택" onChange={event => setListId(Number(event.target.value))}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</select>}
@@ -137,5 +142,5 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('bb')} onChange={() => toggle('bb')} />Bollinger</label><div className="parameter-inputs"><input aria-label="볼린저 기간" type="number" min="1" value={config.bbPeriod} onChange={event => setConfig(current => ({ ...current, bbPeriod: Number(event.target.value) }))} /><input aria-label="볼린저 배수" type="number" min="0.1" step="0.1" value={config.bbK} onChange={event => setConfig(current => ({ ...current, bbK: Number(event.target.value) }))} /></div></div>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('volume_ma')} onChange={() => toggle('volume_ma')} />거래량 이평</label><input aria-label="거래량 이평 기간" type="number" min="1" value={config.volumeMaPeriod} onChange={event => setConfig(current => ({ ...current, volumeMaPeriod: Number(event.target.value) }))} /></div>
     </>}
-    <div className="section-title">시세</div><table className="table table--kv"><tbody>{[['시가',won(detail.quote.open as number)],['고가',won(detail.quote.high as number)],['저가',won(detail.quote.low as number)],['거래량',Number(detail.quote.volume || 0).toLocaleString()],['시가총액',won(detail.fundamental.market_cap)],['PER',ratio(detail.fundamental.per)],['PBR',ratio(detail.fundamental.pbr)]].map(([label,value]) => <tr key={label}><td>{label}</td><td>{value}</td></tr>)}</tbody></table>{detail.position && <><div className="section-title">보유</div><div className="msg">{detail.position.quantity}주 · 평균 {won(detail.position.avg_cost)}<br />평가손익 <b>{won(detail.position.unrealized)}</b></div></>}</aside></div>;
+    <div className="section-title">시세</div><table className="table table--kv"><tbody>{quoteRows.map(([label, value, hint]) => <tr key={label}><td title={hint}>{label}</td><td>{value}</td></tr>)}</tbody></table>{detail.position && <><div className="section-title">보유</div><div className="msg">{detail.position.quantity}주 · 평균 {won(detail.position.avg_cost)}<br />평가손익 <b>{won(detail.position.unrealized)}</b></div></>}</aside></div>;
 }

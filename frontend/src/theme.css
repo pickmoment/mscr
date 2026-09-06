@@ -621,7 +621,6 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 .quote-tag { color: var(--text-3); font: 11px var(--font-mono); letter-spacing: .03em; white-space: nowrap; }
 .quote-price { font: 600 17px/1 var(--font-mono); letter-spacing: -.02em; }
 .quote-change { font: 600 13px/1 var(--font-mono); }
-.quote-facts { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; color: var(--text-3); font: 11px var(--font-mono); }
 
 .pager { display: inline-flex; align-items: center; gap: var(--s1); }
 .pager .count { color: var(--text-3); font: 11px var(--font-mono); min-width: 44px; text-align: center; }
