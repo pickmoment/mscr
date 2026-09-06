@@ -627,17 +627,25 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 
 .chart-box { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); min-height: 0; }
 .chart-canvas { flex: 1; min-height: 0; position: relative; }
-.chart-legend {
-  position: absolute; z-index: 2; top: var(--s2); left: var(--s2); pointer-events: none;
-  display: flex; flex-direction: column; gap: var(--s1);
-  padding: var(--s2) var(--s3);
-  background: color-mix(in srgb, var(--surface) 85%, transparent);
-  border: 1px solid var(--line);
-  border-radius: var(--r1);
-  backdrop-filter: blur(3px);
+/* 크로스헤어가 가리키는 봉 정보를 마우스 옆에 띄우는 카드.
+   pointer-events는 반드시 none — 차트의 드래그·클릭을 가로채면 포지션 선 조작이 끊긴다. */
+.chart-tip {
+  position: absolute; z-index: 3; pointer-events: none;
+  min-width: 150px; padding: var(--s2) var(--s3);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--line-2); border-radius: var(--r1);
+  box-shadow: var(--shadow-2);
+  backdrop-filter: blur(4px);
+  font: 12px/1.5 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-2);
+  white-space: nowrap;
 }
-.legend-row { display: flex; align-items: center; gap: var(--s2); font: 12px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-2); }
-.legend-field i { font-style: normal; color: var(--text-3); margin-right: 3px; }
+.chart-tip__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); padding-bottom: 3px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--text); font-weight: 600; }
+.chart-tip__grid { display: grid; grid-template-columns: auto 1fr; gap: 1px var(--s4); }
+.chart-tip__grid i { font-style: normal; color: var(--text-3); }
+.chart-tip__grid b { font-weight: 600; text-align: right; }
+.chart-tip__foot { display: flex; justify-content: space-between; gap: var(--s3); margin-top: 4px; padding-top: 3px; border-top: 1px dashed var(--line); color: var(--text-3); }
+.chart-tip__foot b { font-weight: 600; }
+.chart-tip__foot .warn { color: var(--warn); }
 
 .sidebar { padding: var(--s5); display: grid; gap: var(--s3); align-content: start; }
 

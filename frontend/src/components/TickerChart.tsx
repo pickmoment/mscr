@@ -11,9 +11,12 @@ type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | n
 // 오버레이·MACD는 가격 방향이 아니라 서로를 구분하는 색이라 상승/하락 토큰을 쓰면 안 된다.
 const SERIES = ['#f5c451', '#5ba7ff', '#c08aff', '#39c6b5', '#ff8f70'];
 
+type Hover = { bar: ChartBar; prevClose: number | null; x: number; y: number; width: number; height: number };
+
 export default function TickerChart({ data, light, plan, kind, onPlanChange, measuring, onLastBarChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  const [legend, setLegend] = useState<ChartBar | null>(null);
+  // 크로스헤어가 가리키는 봉 + 그 봉을 담은 툴팁을 마우스 옆 어디에 띄울지 정할 좌표/패널 크기.
+  const [hover, setHover] = useState<Hover | null>(null);
   // 데이터 전체의 마지막 봉이 아니라 지금 화면(줌·스크롤)에 보이는 범위의 마지막 봉을 가리킨다.
   const [lastBar, setLastBar] = useState<ChartBar | null>(null);
   const lastBarChangeRef = useRef(onLastBarChange);
@@ -106,7 +109,12 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     container.addEventListener('mousedown', onDown);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-    const onCrosshair = (param: MouseEventParams<Time>) => { if (typeof param.time !== 'string') return; const point = data.bars.find(bar => bar.time === param.time); setLegend(point || null); };
+    const onCrosshair = (param: MouseEventParams<Time>) => {
+      if (!param.point || typeof param.time !== 'string') { setHover(null); return; }
+      const index = data.bars.findIndex(bar => bar.time === param.time);
+      if (index === -1) { setHover(null); return; }
+      setHover({ bar: data.bars[index], prevClose: index > 0 ? data.bars[index - 1].close : null, x: param.point.x, y: param.point.y, width: container.clientWidth, height: container.clientHeight });
+    };
     chart.subscribeCrosshairMove(onCrosshair);
     const onClick = (param: MouseEventParams<Time>) => {
       if (!measuringRef.current || typeof param.time !== 'string') return;
@@ -136,35 +144,35 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
       zonesRef.current = null;
       measureToolRef.current = null;
       chart.remove();
-      setLegend(null);
+      setHover(null);
       setLastBar(null);
       setMeasurePoints([]);
     };
   }, [data, light]);
   // 크로스헤어가 가리키는 봉에서 화면에 보이는 마지막 봉까지 가격이 얼마나 움직였는지 — "여기서 들어갔으면 지금은?" 감을 잡는 용도.
-  const changePct = legend && lastBar && legend.close ? (lastBar.close / legend.close - 1) * 100 : null;
+  const toLast = hover && lastBar && hover.bar.time !== lastBar.time && hover.bar.close ? (lastBar.close / hover.bar.close - 1) * 100 : null;
+  const barPct = hover && hover.prevClose ? (hover.bar.close / hover.prevClose - 1) * 100 : null;
+  const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   // 부모(.chart-box)의 높이가 내용에 따라 늘어나므로 height:100%는 확정 높이가 없어 무너진다. 절대 배치로 홀더를 그대로 채운다.
-  return <div style={{ position: 'absolute', inset: 0 }}><div className="chart-legend">
-    {lastBar && <div className="legend-row">
-      <span className="badge">마지막봉</span>
-      <span className="mono">{lastBar.time}</span>
-      <span className="legend-field"><i>O</i>{won(lastBar.open)}</span>
-      <span className="legend-field"><i>H</i>{won(lastBar.high)}</span>
-      <span className="legend-field"><i>L</i>{won(lastBar.low)}</span>
-      <span className={`legend-field ${lastBar.close >= lastBar.open ? 'up' : 'down'}`}><i>C</i>{won(lastBar.close)}</span>
-      <span className="legend-field"><i>V</i>{compactVolume(lastBar.volume)}</span>
+  return <div style={{ position: 'absolute', inset: 0 }}>
+    {/* 툴팁 크기를 재지 않아도 잘리지 않도록, 커서가 패널 절반을 넘으면 반대쪽으로 뒤집어 붙인다. */}
+    {hover && <div className="chart-tip" style={{ left: hover.x, top: hover.y, transform: `translate(${hover.x > hover.width / 2 ? 'calc(-100% - 16px)' : '16px'}, ${hover.y > hover.height / 2 ? 'calc(-100% - 16px)' : '16px'})` }}>
+      <div className="chart-tip__head">
+        <span>{hover.bar.time}</span>
+        {barPct != null && <span className={barPct >= 0 ? 'up' : 'down'}>{signed(barPct)}</span>}
+      </div>
+      <div className="chart-tip__grid">
+        <i>시가</i><b>{won(hover.bar.open)}</b>
+        <i>고가</i><b>{won(hover.bar.high)}</b>
+        <i>저가</i><b>{won(hover.bar.low)}</b>
+        <i>종가</i><b className={hover.bar.close >= hover.bar.open ? 'up' : 'down'}>{won(hover.bar.close)}</b>
+        <i>거래량</i><b>{compactVolume(hover.bar.volume)}</b>
+      </div>
+      {(toLast != null || hover.bar.halted) && <div className="chart-tip__foot">
+        {toLast != null && <span>마지막봉까지 <b className={toLast >= 0 ? 'up' : 'down'}>{signed(toLast)}</b></span>}
+        {hover.bar.halted && <span className="warn">거래정지</span>}
+      </div>}
     </div>}
-    <div className="legend-row">
-      {legend ? <>
-        <span className="badge" data-tone="live">마우스</span>
-        <span className="mono">{legend.time}</span>
-        <span className="legend-field"><i>O</i>{won(legend.open)}</span>
-        <span className="legend-field"><i>H</i>{won(legend.high)}</span>
-        <span className="legend-field"><i>L</i>{won(legend.low)}</span>
-        <span className={`legend-field ${legend.close >= legend.open ? 'up' : 'down'}`}><i>C</i>{won(legend.close)}</span>
-        <span className="legend-field"><i>V</i>{compactVolume(legend.volume)}</span>
-        {changePct != null && <span className="badge" data-tone={changePct >= 0 ? 'up' : 'down'}>→마지막봉 {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%</span>}
-      </> : <span className="subtle">크로스헤어를 움직여 OHLCV 확인</span>}
-    </div>
-  </div><div ref={ref} style={{ width: '100%', height: '100%' }} /></div>;
+    <div ref={ref} style={{ width: '100%', height: '100%' }} />
+  </div>;
 }
