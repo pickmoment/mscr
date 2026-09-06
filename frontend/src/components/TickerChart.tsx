@@ -2,18 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
 import { BarsResponse, ChartBar } from '../lib/api';
 import { compactVolume, won } from '../lib/format';
-import { MeasureBar, MeasureRange, MeasureTool } from '../lib/measure';
+import { MeasureBar, MeasureMode, MeasureRange, MeasureSpan, MeasureTool, SpanTool } from '../lib/measure';
 import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
 import { alpha, readTokens, UI_FONT } from '../lib/tokens';
 
-type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void; measuring: boolean; onLastBarChange?: (bar: ChartBar | null) => void };
+type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void; measure: MeasureMode; onLastBarChange?: (bar: ChartBar | null) => void };
 
 // 오버레이·MACD는 가격 방향이 아니라 서로를 구분하는 색이라 상승/하락 토큰을 쓰면 안 된다.
 const SERIES = ['#f5c451', '#5ba7ff', '#c08aff', '#39c6b5', '#ff8f70'];
 
 type Hover = { bar: ChartBar; prevClose: number | null; x: number; y: number; width: number; height: number };
 
-export default function TickerChart({ data, light, plan, kind, onPlanChange, measuring, onLastBarChange }: Props) {
+export default function TickerChart({ data, light, plan, kind, onPlanChange, measure, onLastBarChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   // 크로스헤어가 가리키는 봉 + 그 봉을 담은 툴팁을 마우스 옆 어디에 띄울지 정할 좌표/패널 크기.
   const [hover, setHover] = useState<Hover | null>(null);
@@ -32,7 +32,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
   changeRef.current = onPlanChange;
   const zonesRef = useRef<PositionZones | null>(null);
   useEffect(() => { zonesRef.current?.update(); }, [plan]);
-  // 구간 측정: 클릭으로 고른 봉 최대 2개. 세 번째 클릭은 새로 첫 봉부터 다시 잰다.
+  // 봉구간 측정: 클릭으로 고른 봉 최대 2개. 세 번째 클릭은 새로 첫 봉부터 다시 잰다.
   const [measurePoints, setMeasurePoints] = useState<MeasureBar[]>([]);
   const measureRangeRef = useRef<MeasureRange | null>(null);
   measureRangeRef.current = null;
@@ -43,11 +43,21 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     for (let i = lo; i <= hi; i += 1) { const bar = data.bars[i]; if (bar.low < low) low = bar.low; if (bar.high > high) high = bar.high; }
     measureRangeRef.current = { a, b, low, high };
   }
-  const measuringRef = useRef(measuring);
-  measuringRef.current = measuring;
+  // 선구간 측정: 클릭한 가격 최대 2개. 봉구간과 같은 규칙으로 세 번째 클릭은 처음부터 다시 잰다.
+  const [span, setSpan] = useState<MeasureSpan | null>(null);
+  const spanRef = useRef<MeasureSpan | null>(span);
+  spanRef.current = span;
+  const measureRef = useRef(measure);
+  measureRef.current = measure;
   const measureToolRef = useRef<MeasureTool | null>(null);
+  const spanToolRef = useRef<SpanTool | null>(null);
   useEffect(() => { measureToolRef.current?.update(); }, [measurePoints]);
-  useEffect(() => { if (!measuring) setMeasurePoints([]); }, [measuring]);
+  useEffect(() => { spanToolRef.current?.update(); }, [span]);
+  // 도구를 끄거나 다른 도구로 바꾸면 그 도구가 그리던 것도 같이 지운다.
+  useEffect(() => {
+    if (measure !== 'bars') setMeasurePoints([]);
+    if (measure !== 'lines') setSpan(null);
+  }, [measure]);
   useEffect(() => {
     if (!ref.current || !data || !data.bars.length) return;
     const t = readTokens();
@@ -82,6 +92,9 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     const measureTool = new MeasureTool(() => measureRangeRef.current, { up: t.up, down: t.down, back: t.surface2 });
     candles.attachPrimitive(measureTool);
     measureToolRef.current = measureTool;
+    const spanTool = new SpanTool(() => spanRef.current, { up: t.up, down: t.down, back: t.surface2 });
+    candles.attachPrimitive(spanTool);
+    spanToolRef.current = spanTool;
     let dragging: PositionLevel | null = null;
     const paneY = (event: MouseEvent) => event.clientY - container.getBoundingClientRect().top;
     const onDown = (event: MouseEvent) => {
@@ -117,11 +130,21 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     };
     chart.subscribeCrosshairMove(onCrosshair);
     const onClick = (param: MouseEventParams<Time>) => {
-      if (!measuringRef.current || typeof param.time !== 'string') return;
-      const index = data.bars.findIndex(bar => bar.time === param.time);
-      if (index === -1) return;
-      const bar = data.bars[index];
-      setMeasurePoints(current => current.length >= 2 ? [{ time: bar.time, close: bar.close, index }] : [...current, { time: bar.time, close: bar.close, index }]);
+      const mode = measureRef.current;
+      if (mode === 'bars') {
+        if (typeof param.time !== 'string') return;
+        const index = data.bars.findIndex(bar => bar.time === param.time);
+        if (index === -1) return;
+        const bar = data.bars[index];
+        setMeasurePoints(current => current.length >= 2 ? [{ time: bar.time, close: bar.close, index }] : [...current, { time: bar.time, close: bar.close, index }]);
+        return;
+      }
+      // 가격 좌표는 캔들 판(0번)에서만 뜻이 있다 — RSI·MACD 판을 클릭한 y는 가격이 아니다.
+      if (mode !== 'lines' || !param.point || (param.paneIndex ?? 0) !== 0) return;
+      const price = candles.coordinateToPrice(param.point.y);
+      if (price === null) return;
+      const level = alignTick(price, kindRef.current);
+      setSpan(current => current && current.second === null ? { ...current, second: level } : { first: level, second: null });
     };
     chart.subscribeClick(onClick);
     const timeScale = chart.timeScale();
@@ -143,10 +166,12 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
       timeScale.unsubscribeVisibleLogicalRangeChange(onVisibleRange);
       zonesRef.current = null;
       measureToolRef.current = null;
+      spanToolRef.current = null;
       chart.remove();
       setHover(null);
       setLastBar(null);
       setMeasurePoints([]);
+      setSpan(null);
     };
   }, [data, light]);
   // 크로스헤어가 가리키는 봉에서 화면에 보이는 마지막 봉까지 가격이 얼마나 움직였는지 — "여기서 들어갔으면 지금은?" 감을 잡는 용도.

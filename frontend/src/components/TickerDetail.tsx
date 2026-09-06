@@ -4,6 +4,7 @@ import TickerChart from './TickerChart';
 import { ratio, won } from '../lib/format';
 import PositionPlanner from './PositionPlanner';
 import { defaultPlan, loadPositionPlans, POSITION_EVENT, PositionPlan, storePositionPlan } from '../lib/position';
+import { MeasureMode } from '../lib/measure';
 import { SelectTicker } from '../lib/nav';
 import ViewHeader from './ViewHeader';
 
@@ -31,7 +32,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const [listId, setListId] = useState<number | null>(null);
   const [watchMessage, setWatchMessage] = useState('');
   const [plan, setPlan] = useState<PositionPlan | null>(null);
-  const [measuring, setMeasuring] = useState(false);
+  const [measure, setMeasure] = useState<MeasureMode>('off');
   const [viewportLastBar, setViewportLastBar] = useState<ChartBar | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const loadLists = useCallback(() => {
@@ -132,8 +133,8 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
       </div>
     </div>
     <div className="panel chart-box">
-      <div className="toolbar"><div className="segmented">{['3m','6m','1y','3y','max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>)}</div><button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><button className="btn btn--ghost" aria-pressed={measuring} onClick={() => setMeasuring(current => !current)} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">구간 측정</button><span className="subtle push">{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
-      <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} measuring={measuring} onLastBarChange={setViewportLastBar} /></div>
+      <div className="toolbar"><div className="segmented">{['3m','6m','1y','3y','max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>)}</div><button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><button className="btn btn--ghost" aria-pressed={measure === 'bars'} onClick={() => setMeasure(current => current === 'bars' ? 'off' : 'bars')} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">봉구간 측정</button><button className="btn btn--ghost" aria-pressed={measure === 'lines'} onClick={() => setMeasure(current => current === 'lines' ? 'off' : 'lines')} title="차트에서 가격 두 곳을 클릭하면 가로선 두 개를 긋고 그 상하폭을 금액·비율로 표시합니다">선구간 측정</button><span className="subtle push">{chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
+      <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} measure={measure} onLastBarChange={setViewportLastBar} /></div>
     </div></div><aside className="panel sidebar scroll">{plan && <PositionPlanner plan={plan} ticker={detail.ticker} name={detail.name} kind={detail.kind} onChange={savePlan} onReset={() => savePlan(freshPlan())} onClose={() => savePlan(null)} />}<div className="toolbar"><div className="section-title">지표 설정</div><button className="btn btn--quiet btn--sm push" aria-expanded={showParams} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>
     {showParams && <>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('ma')} onChange={() => toggle('ma')} />이동평균</label><div className="parameter-inputs">{config.maPeriods.map((period, index) => <input key={index} aria-label={`이동평균 기간 ${index + 1}`} type="number" min="1" value={period} onChange={event => setConfig(current => ({ ...current, maPeriods: current.maPeriods.map((value, position) => position === index ? Number(event.target.value) : value) }))} />)}</div></div>
