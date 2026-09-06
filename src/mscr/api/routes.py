@@ -27,7 +27,7 @@ from ..providers.krx import KRXProvider, _stock, clear_krx_credentials, krx_stat
 from ..screener import FIELDS, run
 from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, simulate_plan, sync_orders
 from ..autoplan import propose as propose_plan
-from .models import ActiveEnvRequest, BacktestRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, RiskLimitRequest, ScreenRequest, ScreenSaveRequest, SignalCaptureRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
+from .models import ActiveEnvRequest, BacktestRequest, BriefSettingsRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, RiskLimitRequest, ScreenRequest, ScreenSaveRequest, SignalCaptureRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
 
 router = APIRouter(prefix="/api")
 
@@ -652,6 +652,12 @@ def signals_history(ticker: str, limit: int = Query(50, ge=1, le=500)):
 @router.get("/brief")
 def daily_brief(date: str | None = Query(None)):
     return brief.build(date)
+
+
+@router.put("/brief/settings")
+def put_brief_settings(request: BriefSettingsRequest):
+    brief.set_tracked_screen_ids(request.screen_ids)
+    return brief.build()
 
 
 @router.get("/risk/heat")

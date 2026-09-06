@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from . import risk, signals, trading, watchlist
@@ -17,7 +18,29 @@ NEAR_PCT = 3.0
 STREAK_LEADERS = 5
 RENDER_ROWS = 10
 FAR_FUTURE = "9999-12-31"
+TRACKED_SCREENS_KEY = "brief_screen_ids"
 PHASE_LABELS = {"waiting_entry": "진입대기", "holding": "보유중", "tp1_done": "1차익절", "trailing": "트레일링", "closed": "청산"}
+
+
+def tracked_screen_ids(path=None) -> list[int] | None:
+    """브리핑이 추적할 프리셋 id 목록. 설정한 적이 없으면 `None`(전체 프리셋 추적)."""
+    with db_session(path) as db:
+        row = db.execute("SELECT value FROM settings WHERE key=?", (TRACKED_SCREENS_KEY,)).fetchone()
+    if row is None: return None
+    try:
+        return [int(value) for value in json.loads(row["value"])]
+    except (TypeError, ValueError):
+        return None
+
+
+def set_tracked_screen_ids(ids: list[int] | None, path=None) -> None:
+    """`None`은 필터를 지우고 전체 프리셋을 다시 추적한다. 빈 리스트는 '아무 프리셋도 추적하지 않음'으로 그대로 저장된다."""
+    with db_session(path) as db:
+        if ids is None:
+            db.execute("DELETE FROM settings WHERE key=?", (TRACKED_SCREENS_KEY,))
+        else:
+            db.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (TRACKED_SCREENS_KEY, json.dumps(sorted({int(value) for value in ids}))))
 
 
 def _recent_bars(db, tickers: list[str], bound: str) -> dict[str, list[dict[str, Any]]]:
@@ -48,13 +71,19 @@ def _signal_row(row: dict[str, Any], bars: dict[str, list[dict[str, Any]]], stre
     }
 
 
-def _screen_logs(as_of: str | None, path) -> list[dict[str, Any]]:
-    """프리셋별 '기준일 이하 가장 최근 수집일' 한 줄. 수집이 밀린 프리셋도 자기 최신일로 남는다."""
+def _screen_logs(as_of: str | None, path, screen_ids: list[int] | None = None) -> list[dict[str, Any]]:
+    """프리셋별 '기준일 이하 가장 최근 수집일' 한 줄. 수집이 밀린 프리셋도 자기 최신일로 남는다.
+    `screen_ids`가 빈 리스트면(설정에서 전부 해제) 아무 프리셋도 보지 않는다 — `None`(미설정)과 구분된다."""
+    if screen_ids is not None and not screen_ids: return []
+    clause, params = "", [as_of or FAR_FUTURE]
+    if screen_ids:
+        clause = f" AND r.screen_id IN ({','.join('?' * len(screen_ids))})"
+        params.extend(int(value) for value in screen_ids)
     with db_session(path) as db:
         runs = db.execute(
             "SELECT r.screen_id, s.name, r.date, r.matched FROM screen_runs r JOIN screens s ON s.id=r.screen_id "
-            "WHERE r.date=(SELECT MAX(d.date) FROM screen_runs d WHERE d.screen_id=r.screen_id AND d.date<=?) ORDER BY s.name",
-            (as_of or FAR_FUTURE,)).fetchall()
+            f"WHERE r.date=(SELECT MAX(d.date) FROM screen_runs d WHERE d.screen_id=r.screen_id AND d.date<=?){clause} ORDER BY s.name",
+            params).fetchall()
     logs = []
     for run in runs:
         logs.append({
@@ -131,7 +160,8 @@ def build(date: str | None = None, path=None) -> dict[str, Any]:
     index = days.index(as_of) if as_of else 0
     previous = days[index - 1] if as_of and index > 0 else None
 
-    logs = _screen_logs(as_of, path)
+    tracked = tracked_screen_ids(path)
+    logs = _screen_logs(as_of, path, tracked)
     plans = _plan_rows(path)
     tickers = {row["ticker"] for log in logs for key in ("entered", "held", "exited") for row in log["diff"][key]}
     plan_tickers = sorted({row["ticker"] for row in plans})
@@ -160,12 +190,14 @@ def build(date: str | None = None, path=None) -> dict[str, Any]:
     exposure = risk.heat(path)
     latest_capture = max((log["date"] for log in logs), default=None)
     warnings = list(exposure["warnings"])
-    if not logs:
+    if tracked is not None and not tracked:
+        warnings.append("브리핑에서 추적할 프리셋이 없습니다 — 브리핑 설정에서 프리셋을 선택하세요")
+    elif not logs:
         warnings.append("신호 로그가 비어 있습니다 — `mscr signals capture`로 프리셋 신호를 먼저 수집하세요")
     elif as_of and latest_capture < as_of:
         warnings.append(f"최근 신호 수집일이 {latest_capture}로 기준일 {as_of}보다 오래되었습니다 — 신호 수집을 실행하세요")
     return {
-        "as_of": as_of, "previous": previous, "screens": screens, "plans": plans,
+        "as_of": as_of, "previous": previous, "tracked_screen_ids": tracked, "screens": screens, "plans": plans,
         "watchlist": _watchlist_section(path), "positions": _position_rows(path),
         "heat": {
             "heat_pct": exposure["heat_pct"], "total_risk_krw": exposure["total_risk_krw"],

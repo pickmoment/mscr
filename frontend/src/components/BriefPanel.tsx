@@ -33,6 +33,8 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
   const [message, setMessage] = useState('');
   const [tone, setTone] = useState<'ok' | 'warn' | 'error' | undefined>(undefined);
   const [expanded, setExpanded] = useState<number[]>([]);
+  const [allScreens, setAllScreens] = useState<{ id: number; name: string }[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
   const timer = useRef<number | null>(null);
 
   const fail = (error: unknown, fallback: string) => { setTone('error'); setMessage(error instanceof Error ? error.message : fallback); };
@@ -75,9 +77,23 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
     } catch (error) { setCapturing(false); fail(error, '신호 수집을 시작할 수 없습니다.'); }
   };
 
+  // 추적할 프리셋 설정. `tracked_screen_ids`가 null이면 전체 프리셋을 추적하는 것으로 취급한다.
+  const toggleTrackedScreen = async (id: number) => {
+    const current = data?.tracked_screen_ids ?? allScreens.map(screen => screen.id);
+    const next = current.includes(id) ? current.filter(value => value !== id) : [...current, id];
+    try { setData(await api.saveBriefScreens(next.length === allScreens.length ? null : next)); }
+    catch (error) { fail(error, '브리핑 설정을 저장할 수 없습니다.'); }
+  };
+
+  const resetTrackedScreens = async () => {
+    try { setData(await api.saveBriefScreens(null)); }
+    catch (error) { fail(error, '브리핑 설정을 저장할 수 없습니다.'); }
+  };
+
   useEffect(() => {
     load();
     api.signalStatus().then(status => { setJob(status); if (status.running) { setCapturing(true); poll(); } }).catch(() => undefined);
+    api.screens().then(rows => setAllScreens(rows.map(row => ({ id: row.id, name: row.name })))).catch(() => undefined);
     return () => { if (timer.current !== null) window.clearTimeout(timer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -164,12 +180,28 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
       <span className="badge">직전 {data ? dash(data.previous) : '—'}</span>
       <button className="btn btn--ghost push" onClick={load} disabled={loading}>새로고침</button>
       <button className="btn btn--primary" onClick={capture} disabled={running} title="저장된 스크리너 프리셋을 오늘 날짜로 다시 돌려 신호 로그에 남깁니다.">신호 수집</button>
+      <button className="btn btn--ghost" aria-pressed={showSettings} onClick={() => setShowSettings(current => !current)} title="브리핑의 프리셋 신호 구획에서 추적할 프리셋을 고릅니다.">프리셋 설정</button>
       {/* 작업을 막 띄운 직후에는 서버가 아직 총 건수를 세지 않아 total·current가 비어 온다. 그때는 '준비 중'만 보여 준다. */}
       {running && <span className="progress-note"><span className="spinner" />
         {job?.total == null ? '준비 중' : `${job.processed ?? 0}/${job.total}`}
         {job?.current ? ` ${job.current}` : ''}
       </span>}
     </div>
+
+    {showSettings && <div className="stack">
+      <div className="toolbar">
+        <div className="section-title">추적할 프리셋</div>
+        <span className="badge">{data?.tracked_screen_ids ? `${data.tracked_screen_ids.length}/${allScreens.length}` : `전체 ${allScreens.length}`}</span>
+        <button className="btn btn--ghost push" onClick={resetTrackedScreens} disabled={!data?.tracked_screen_ids}>전체 추적</button>
+      </div>
+      <div className="chip-row">
+        {allScreens.map(screen => <label className="check" key={screen.id}>
+          <input type="checkbox" checked={data ? (data.tracked_screen_ids ?? allScreens.map(item => item.id)).includes(screen.id) : true} onChange={() => toggleTrackedScreen(screen.id)} />
+          {screen.name}
+        </label>)}
+        {!allScreens.length && <span className="subtle">저장된 프리셋이 없습니다. 스크리너 탭에서 프리셋을 먼저 저장하세요.</span>}
+      </div>
+    </div>}
 
     {message && <div className="msg" data-tone={tone}>{message}</div>}
     {loading && !data && <div className="empty empty--inline">브리핑을 불러오는 중입니다…</div>}
@@ -193,11 +225,17 @@ export default function BriefPanel({ onSelect, onOpenTab }: { onSelect: SelectTi
 
       {data.screens.length
         ? <div className="stack stack--lg">
-          <div className="section-title">프리셋 신호</div>
+          <div className="toolbar">
+            <div className="section-title">프리셋 신호</div>
+            {!!data.tracked_screen_ids && <span className="badge" data-tone="accent" title="브리핑 설정에서 고른 프리셋만 봅니다.">추적 {data.tracked_screen_ids.length}/{allScreens.length}</span>}
+          </div>
           {data.screens.map(screenBlock)}
         </div>
         : <div className="stack">
-          <div className="section-title">프리셋 신호</div>
+          <div className="toolbar">
+            <div className="section-title">프리셋 신호</div>
+            {!!data.tracked_screen_ids && <span className="badge" data-tone="accent" title="브리핑 설정에서 고른 프리셋만 봅니다.">추적 {data.tracked_screen_ids.length}/{allScreens.length}</span>}
+          </div>
           <div className="msg">신호 로그가 비어 있습니다. 저장된 스크리너 프리셋을 과거 거래일에 다시 돌려 적중 종목을 쌓아야 신규 편입·이탈·연속 편입일을 볼 수 있습니다. 위의 <b>신호 수집</b> 버튼이 오늘 하루치를 채웁니다.</div>
         </div>}
 

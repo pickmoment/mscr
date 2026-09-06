@@ -155,3 +155,7 @@ class WatchlistItemsActionRequest(BaseModel):
     action: Literal["delete", "move", "copy"]
     tickers: list[str] = Field(min_length=1, max_length=2000)
     target_id: int | None = None
+
+
+class BriefSettingsRequest(BaseModel):
+    screen_ids: list[int] | None = None

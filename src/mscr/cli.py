@@ -294,9 +294,17 @@ def trade_reconcile() -> None:
 
 
 @app.command()
-def brief(date: str = typer.Option(None, "--date", help="기준 거래일 (기본: 최신 수집일)")) -> None:
+def brief(
+    date: str = typer.Option(None, "--date", help="기준 거래일 (기본: 최신 수집일)"),
+    screen: list[int] = typer.Option(None, "--screen", help="브리핑이 추적할 프리셋 id로 제한하고 저장합니다(반복 지정)."),
+    all_screens: bool = typer.Option(False, "--all-screens", help="추적 필터를 지우고 전체 프리셋을 다시 봅니다."),
+) -> None:
     """Print the end-of-day briefing: preset signal changes, plan triggers, watchlist targets, position risk."""
-    from .brief import build, render
+    from .brief import build, render, set_tracked_screen_ids
+    if all_screens:
+        set_tracked_screen_ids(None)
+    elif screen:
+        set_tracked_screen_ids(list(screen))
     typer.echo(render(build(date)))
 
 

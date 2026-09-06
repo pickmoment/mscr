@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from mscr.brief import build, render
+from mscr.brief import build, render, set_tracked_screen_ids, tracked_screen_ids
 from mscr.db import db_session, init_db
 
 
@@ -84,6 +84,45 @@ def test_screen_section_reports_entered_exited_and_streaks(market):
     leader = screen["streak_leaders"][0]
     assert leader["ticker"] == "005930" and leader["streak_days"] == 2
 
+
+
+def test_tracked_screen_ids_defaults_to_none_and_round_trips(market):
+    assert tracked_screen_ids(path=market) is None
+    with db_session(market) as db:
+        screen_id = insert_screen(db, "돌파")
+    set_tracked_screen_ids([screen_id], path=market)
+    assert tracked_screen_ids(path=market) == [screen_id]
+    set_tracked_screen_ids(None, path=market)
+    assert tracked_screen_ids(path=market) is None
+
+
+def test_brief_only_reports_tracked_presets(market):
+    with db_session(market) as db:
+        tracked_id = insert_screen(db, "돌파")
+        insert_signals(db, tracked_id, "2026-06-02", [("005930", 1100)])
+        other_id = insert_screen(db, "역추세")
+        insert_signals(db, other_id, "2026-06-02", [("000660", 1900)])
+
+    set_tracked_screen_ids([tracked_id], path=market)
+    brief = build(path=market)
+    assert brief["tracked_screen_ids"] == [tracked_id]
+    assert [screen["screen_id"] for screen in brief["screens"]] == [tracked_id]
+
+    set_tracked_screen_ids(None, path=market)
+    brief = build(path=market)
+    assert brief["tracked_screen_ids"] is None
+    assert {screen["screen_id"] for screen in brief["screens"]} == {tracked_id, other_id}
+
+
+def test_brief_warns_when_tracked_presets_is_explicitly_empty(market):
+    with db_session(market) as db:
+        screen_id = insert_screen(db, "돌파")
+        insert_signals(db, screen_id, "2026-06-02", [("005930", 1100)])
+
+    set_tracked_screen_ids([], path=market)
+    brief = build(path=market)
+    assert brief["screens"] == []
+    assert any("추적할 프리셋이 없습니다" in warning for warning in brief["warnings"])
 
 def test_screen_without_capture_on_target_day_is_stale_and_warned(market):
     with db_session(market) as db:
