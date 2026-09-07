@@ -10,6 +10,18 @@ type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | n
 
 // 오버레이·MACD는 가격 방향이 아니라 서로를 구분하는 색이라 상승/하락 토큰을 쓰면 안 된다.
 const SERIES = ['#f5c451', '#5ba7ff', '#c08aff', '#39c6b5', '#ff8f70'];
+// 일봉 이상은 서버가 'yyyy-MM-dd' 문자열(BusinessDay)로 준다 — 그대로 보여준다.
+// 분봉은 서버가 KST 벽시계를 그대로 UTC epoch초로 인코딩해 보낸다(라이브러리가 숫자 시간을
+// 항상 UTC getter로 읽으므로) — 여기서도 UTC getter로 되풀이해 읽어야 KST 시각이 그대로 나온다.
+const formatBarTime = (time: Time): string => {
+  if (typeof time === 'number') {
+    const d = new Date(time * 1000);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  }
+  if (typeof time === 'string') return time;
+  return `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`;
+};
 
 type Hover = { bar: ChartBar; prevClose: number | null; x: number; y: number; width: number; height: number };
 
@@ -61,7 +73,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
   useEffect(() => {
     if (!ref.current || !data || !data.bars.length) return;
     const t = readTokens();
-    const chart = createChart(ref.current, { autoSize: true, layout: { background: { type: ColorType.Solid, color: t.surface }, textColor: t.text3, fontFamily: UI_FONT, fontSize: 12, attributionLogo: true, panes: { separatorColor: t.line, separatorHoverColor: t.line2, enableResize: true } }, grid: { vertLines: { color: t.line }, horzLines: { color: t.line } }, crosshair: { mode: CrosshairMode.Normal }, localization: { locale: 'ko-KR', dateFormat: 'yyyy-MM-dd' } });
+    const chart = createChart(ref.current, { autoSize: true, layout: { background: { type: ColorType.Solid, color: t.surface }, textColor: t.text3, fontFamily: UI_FONT, fontSize: 12, attributionLogo: true, panes: { separatorColor: t.line, separatorHoverColor: t.line2, enableResize: true } }, grid: { vertLines: { color: t.line }, horzLines: { color: t.line } }, crosshair: { mode: CrosshairMode.Normal }, localization: { locale: 'ko-KR', dateFormat: 'yyyy-MM-dd' }, timeScale: { timeVisible: true, secondsVisible: false } });
     const candles = chart.addSeries(CandlestickSeries, { priceScaleId: 'right', priceFormat: { type: 'custom', minMove: 1, formatter: won }, upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false }, 0);
     candles.setData(data.bars.map(bar => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, color: bar.halted ? t.text3 : undefined, wickColor: bar.halted ? t.text3 : undefined, borderColor: bar.halted ? t.text3 : undefined })));
     const volume = chart.addSeries(HistogramSeries, { priceScaleId: 'volume', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 0);
@@ -123,7 +135,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     const onCrosshair = (param: MouseEventParams<Time>) => {
-      if (!param.point || typeof param.time !== 'string') { setHover(null); return; }
+      if (!param.point || param.time === undefined) { setHover(null); return; }
       const index = data.bars.findIndex(bar => bar.time === param.time);
       if (index === -1) { setHover(null); return; }
       setHover({ bar: data.bars[index], prevClose: index > 0 ? data.bars[index - 1].close : null, x: param.point.x, y: param.point.y, width: container.clientWidth, height: container.clientHeight });
@@ -132,7 +144,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     const onClick = (param: MouseEventParams<Time>) => {
       const mode = measureRef.current;
       if (mode === 'bars') {
-        if (typeof param.time !== 'string') return;
+        if (param.time === undefined) return;
         const index = data.bars.findIndex(bar => bar.time === param.time);
         if (index === -1) return;
         const bar = data.bars[index];
@@ -183,7 +195,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     {/* 툴팁 크기를 재지 않아도 잘리지 않도록, 커서가 패널 절반을 넘으면 반대쪽으로 뒤집어 붙인다. */}
     {hover && <div className="chart-tip" style={{ left: hover.x, top: hover.y, transform: `translate(${hover.x > hover.width / 2 ? 'calc(-100% - 16px)' : '16px'}, ${hover.y > hover.height / 2 ? 'calc(-100% - 16px)' : '16px'})` }}>
       <div className="chart-tip__head">
-        <span>{hover.bar.time}</span>
+        <span>{formatBarTime(hover.bar.time)}</span>
         {barPct != null && <span className={barPct >= 0 ? 'up' : 'down'}>{signed(barPct)}</span>}
       </div>
       <div className="chart-tip__grid">

@@ -34,6 +34,10 @@ NET_FLOW_FACTORS = (
     ("foreigner_volume_valued_net_sell_top", "외국인 순매도 상위"),
 )
 INDUSTRY_SAMPLE_SIZE = 300  # 업종현황 전용 엔드포인트가 없어 시가총액 상위 표본으로 근사한다
+CANDLE_FREQS = ("minute-1", "minute-3", "minute-5", "minute-15", "minute-30", "minute-60", "day")  # 종목상세 실시간 차트가 고를 수 있는 주기
+CANDLE_PAGE_LIMIT = 1000  # alpha-square 캔들 API가 요청 한 번에 주는 최대 봉수(서버가 강제하는 상한)
+CANDLE_BARS_DEFAULT = CANDLE_PAGE_LIMIT  # 실시간 차트를 처음 열 때 한 번에 가져오는 봉수 — 페이지당 한도를 그대로 채운다
+CANDLE_BARS_MAX = 5000  # "이전 데이터 더보기"로 늘릴 수 있는 총 봉수 상한(페이지 5장) — 비공식 API 호출이 무한정 커지지 않게 막는다
 
 
 def _http_get(session: requests.Session, path: str, params: dict[str, Any], delay: float) -> Any:
@@ -217,6 +221,42 @@ class AlphaSquareProvider:
             (ticker, int(stock_id), pd.Timestamp.now().isoformat(timespec="seconds")),
         )
         return int(stock_id)
+
+    def candles(self, ticker: str, freq: str, count: int = CANDLE_BARS_DEFAULT) -> pd.DataFrame:
+        """단일 종목의 최근 캔들을 alpha-square에서 직접 가져온다 — 로컬 DB(daily_bars)를 거치지 않는
+        실시간 조회 경로다. `count`가 페이지당 한도(`CANDLE_PAGE_LIMIT`=1000)를 넘으면 `_range_bars`와
+        같은 방식으로 과거 방향 페이지를 이어붙인다 — "이전 데이터 더보기"가 이 경로를 쓴다. 여러 페이지를
+        모아도 지표(이동평균 등)는 호출부가 합쳐진 프레임 전체로 한 번에 계산하므로 병합 경계에서 끊기지
+        않는다.
+
+        분봉(`freq`가 `minute-`로 시작)의 시간은 KST 벽시계 값을 그대로 UTC epoch초로 인코딩한다.
+        lightweight-charts는 숫자 시간을 항상 UTC로 표시하므로, 그렇게 해야 화면에 KST 시각이 그대로
+        보인다(진짜 UTC로 보내면 9시간 밀려 보인다). 일봉은 기존 일봉 경로와 동일하게 날짜 문자열을 쓴다.
+        """
+        stock_id = self._resolve(ticker)
+        if stock_id is None:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+        rows: dict[int, list[Any]] = {}
+        cursor = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
+        while len(rows) < count:
+            page_limit = min(CANDLE_PAGE_LIMIT, count - len(rows))
+            payload = self._get(f"/data/v3/prices/candles/{stock_id}", {"freq": freq, "limit": page_limit, "end": cursor})
+            page = [row for row in (payload.get("data") or []) if len(row) >= 6]
+            if not page:
+                break
+            for row in page:
+                rows[int(row[0])] = row
+            oldest_ms = min(int(row[0]) for row in page)
+            if len(page) < page_limit or oldest_ms >= cursor:
+                break  # 짧은 페이지 또는 커서가 움직이지 않음 = 더 과거 데이터가 없다는 뜻
+            cursor = oldest_ms - 1
+        intraday = freq.startswith("minute")
+        out = []
+        for row in (rows[key] for key in sorted(rows)):
+            kst = pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(KST).tz_localize(None)
+            date_value = int(kst.value // 10**9) if intraday else kst.strftime("%Y-%m-%d")
+            out.append({"date": date_value, "open": row[1], "high": row[2], "low": row[3], "close": row[4], "volume": row[5]})
+        return pd.DataFrame(out, columns=["date", "open", "high", "low", "close", "volume"])
 
     def _range_bars(self, stock_id: int, start: str, end: str) -> list[dict[str, Any]]:
         """[start, end] 구간의 일봉을 반환한다. 캔들 API가 요청당 최대 1000봉만 주므로,

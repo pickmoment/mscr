@@ -8,7 +8,7 @@ from mscr.db import db_session, init_db
 
 
 def _call(ticker: str, **overrides):
-    kwargs = dict(range="1y", indicators="ma,rsi,macd,bb", ma_periods="5,20,60", rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, bb_period=20, bb_k=2.0)
+    kwargs = dict(range="1y", source="local", freq="day", count=1000, indicators="ma,rsi,macd,bb", ma_periods="5,20,60", rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, bb_period=20, bb_k=2.0)
     kwargs.update(overrides)
     return routes.bars(ticker, **kwargs)
 

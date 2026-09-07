@@ -291,8 +291,10 @@ def instrument(ticker: str):
     return result
 
 @router.get("/instruments/{ticker}/bars")
-def bars(ticker: str, range: str = Query("1y"), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000)):
-    if range not in {"3m", "6m", "1y", "3y", "max"}:
+def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000)):
+    if source not in {"local", "alphasquare"}:
+        raise HTTPException(422, "invalid source")
+    if source == "local" and range not in {"3m", "6m", "1y", "3y", "max"}:
         raise HTTPException(422, "invalid range")
     try:
         ma_values = list(dict.fromkeys(int(value.strip()) for value in ma_periods.split(",") if value.strip()))
@@ -300,45 +302,62 @@ def bars(ticker: str, range: str = Query("1y"), indicators: str = Query("ma,rsi,
         raise HTTPException(422, "invalid MA periods") from exc
     if not ma_values or len(ma_values) > 5 or any(value < 1 or value > 10000 for value in ma_values):
         raise HTTPException(422, "MA periods must contain 1-5 positive integers")
-    with db_session() as db:
-        item = db.execute("SELECT kind FROM instruments WHERE ticker=?", (ticker,)).fetchone()
-        if not item:
-            raise HTTPException(404, "instrument not found")
-        as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE ticker=?", (ticker,)).fetchone()[0]
-        if not as_of:
-            return {"ticker": ticker, "adjusted": False, "price_jump_flag": False, "bars": [], "overlays": {}}
-        start = (pd.Timestamp(as_of) - pd.Timedelta(days={"3m": 92, "6m": 184, "1y": 366, "3y": 1096, "max": 100000}[range])).strftime("%Y-%m-%d")
-        rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='adjusted' AND date>=? AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL ORDER BY date", (ticker, start)).fetchall()
-        adjusted = bool(rows)
-        stale = bool(rows) and rows[-1]["date"] < as_of
-        # 캐시된 adjusted 데이터가 이 범위의 시작일까지 닿는지 별도로 확인한다. rows는 date>=start로만 걸러서
-        # tail(최신 봉)이 최신이어도 head(과거 봉)가 이전에 더 좁은 range로 캐시된 채 남아있을 수 있다.
-        floor = db.execute("SELECT earliest_attempted FROM bars_coverage WHERE ticker=? AND source='adjusted'", (ticker,)).fetchone()
-        incomplete = floor is None or floor[0] > start
-        if not rows or stale or incomplete:
-            try:
-                history = KRXProvider().history(ticker, start, as_of, item["kind"], adjusted=True)
-                if not history.empty:
-                    db.executemany("INSERT OR REPLACE INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", [(ticker, r.get("date"), "adjusted", r.get("open"), r.get("high"), r.get("low"), r.get("close"), r.get("volume"), r.get("value"), r.get("nav"), 0) for r in history.to_dict("records")])
-                    rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='adjusted' AND date>=? AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL ORDER BY date", (ticker, start)).fetchall()
-                    adjusted = True
-                # 결과가 비어도(더 이상 과거 데이터가 없다는 뜻) 다음 요청에서 같은 구간을 또 조회하지 않도록 기록한다.
-                db.execute("INSERT INTO bars_coverage(ticker,source,earliest_attempted) VALUES(?,'adjusted',?) ON CONFLICT(ticker,source) DO UPDATE SET earliest_attempted=MIN(earliest_attempted,excluded.earliest_attempted)", (ticker, start))
-            except Exception:
-                pass
-        if not rows:
-            rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=? ORDER BY date", (ticker, start)).fetchall()
-            adjusted = False
-    frame = pd.DataFrame([dict(row) for row in rows])
-    if frame.empty:
-        return {"ticker": ticker, "adjusted": adjusted, "price_jump_flag": False, "bars": [], "overlays": {}}
+    if source == "alphasquare":
+        from ..providers.alphasquare import CANDLE_FREQS, AlphaSquareProvider
+        if freq not in CANDLE_FREQS:
+            raise HTTPException(422, "invalid freq")
+        with db_session() as db:
+            item = db.execute("SELECT kind FROM instruments WHERE ticker=?", (ticker,)).fetchone()
+            if not item:
+                raise HTTPException(404, "instrument not found")
+            frame = AlphaSquareProvider(db).candles(ticker, freq, count=count)
+        adjusted = False
+        if frame.empty:
+            return {"ticker": ticker, "adjusted": False, "price_jump_flag": False, "bars": [], "overlays": {}, "source": source, "freq": freq}
+        frame["halted"] = 0
+    else:
+        with db_session() as db:
+            item = db.execute("SELECT kind FROM instruments WHERE ticker=?", (ticker,)).fetchone()
+            if not item:
+                raise HTTPException(404, "instrument not found")
+            as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE ticker=?", (ticker,)).fetchone()[0]
+            if not as_of:
+                return {"ticker": ticker, "adjusted": False, "price_jump_flag": False, "bars": [], "overlays": {}, "source": source, "freq": None}
+            start = (pd.Timestamp(as_of) - pd.Timedelta(days={"3m": 92, "6m": 184, "1y": 366, "3y": 1096, "max": 100000}[range])).strftime("%Y-%m-%d")
+            rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='adjusted' AND date>=? AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL ORDER BY date", (ticker, start)).fetchall()
+            adjusted = bool(rows)
+            stale = bool(rows) and rows[-1]["date"] < as_of
+            # 캐시된 adjusted 데이터가 이 범위의 시작일까지 닿는지 별도로 확인한다. rows는 date>=start로만 걸러서
+            # tail(최신 봉)이 최신이어도 head(과거 봉)가 이전에 더 좁은 range로 캐시된 채 남아있을 수 있다.
+            floor = db.execute("SELECT earliest_attempted FROM bars_coverage WHERE ticker=? AND source='adjusted'", (ticker,)).fetchone()
+            incomplete = floor is None or floor[0] > start
+            if not rows or stale or incomplete:
+                try:
+                    history = KRXProvider().history(ticker, start, as_of, item["kind"], adjusted=True)
+                    if not history.empty:
+                        db.executemany("INSERT OR REPLACE INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", [(ticker, r.get("date"), "adjusted", r.get("open"), r.get("high"), r.get("low"), r.get("close"), r.get("volume"), r.get("value"), r.get("nav"), 0) for r in history.to_dict("records")])
+                        rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='adjusted' AND date>=? AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL ORDER BY date", (ticker, start)).fetchall()
+                        adjusted = True
+                    # 결과가 비어도(더 이상 과거 데이터가 없다는 뜻) 다음 요청에서 같은 구간을 또 조회하지 않도록 기록한다.
+                    db.execute("INSERT INTO bars_coverage(ticker,source,earliest_attempted) VALUES(?,'adjusted',?) ON CONFLICT(ticker,source) DO UPDATE SET earliest_attempted=MIN(earliest_attempted,excluded.earliest_attempted)", (ticker, start))
+                except Exception:
+                    pass
+            if not rows:
+                rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=? ORDER BY date", (ticker, start)).fetchall()
+                adjusted = False
+        frame = pd.DataFrame([dict(row) for row in rows])
+        if frame.empty:
+            return {"ticker": ticker, "adjusted": adjusted, "price_jump_flag": False, "bars": [], "overlays": {}, "source": source, "freq": None}
     halted = frame["halted"].astype(bool)
     for col in ("open", "high", "low"):
         frame.loc[halted, col] = frame.loc[halted, "close"]
-    valid, price_jump_flag = truncate_price_jump(frame[~halted].reset_index(drop=True))
+    if source == "alphasquare":
+        valid, price_jump_flag = frame[~halted].reset_index(drop=True), False
+    else:
+        valid, price_jump_flag = truncate_price_jump(frame[~halted].reset_index(drop=True))
     series = [pd.Series(valid[col].to_numpy(dtype=float), index=valid["date"].tolist()) for col in ("open", "high", "low", "close", "volume")]
     requested = {part.strip() for part in indicators.split(",")}
-    output = {"ticker": ticker, "adjusted": adjusted, "price_jump_flag": price_jump_flag, "bars": [{"time": r["date"], "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"], "volume": r["volume"], "halted": bool(r["halted"])} for r in frame.to_dict("records")], "overlays": {}}
+    output = {"ticker": ticker, "adjusted": adjusted, "price_jump_flag": price_jump_flag, "bars": [{"time": r["date"], "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"], "volume": r["volume"], "halted": bool(r["halted"])} for r in frame.to_dict("records")], "overlays": {}, "source": source, "freq": freq if source == "alphasquare" else None}
     if "ma" in requested:
         for period in ma_values:
             values = sma(series[3], period)

@@ -1,12 +1,15 @@
+import type { Time } from 'lightweight-charts';
 export type ScreenSpec = { universe: { kinds: string[]; markets: string[]; exclude_preferred: boolean; exclude_spac: boolean; exclude_halted: boolean; min_bars: number }; formula: string; sort: { formula: string; dir: 'asc' | 'desc' }; limit: number; as_of_offset: number };
 export type ScreenRow = { ticker: string; name: string; kind: string; market: string | null; close: number | null; change_pct: number | null; volume: number | null; value: number | null; market_cap: number | null; per: number | null; pbr: number | null; bars_available: number; price_jump_flag: number; halted: number; weighted_return: number | null; _sort?: number | null };
 export type Meta = { as_of: string | null; instrument_count: { stock: number; etf: number }; bars_rows: number; last_ingest_at: string | null; data_ready: boolean };
 export type Instrument = { ticker: string; name: string; kind: string; market: string | null; category: string | null; base_index: string | null; as_of: string | null; quote: Record<string, number | boolean | null>; fundamental: Record<string, number | null>; bars_available: number; position: Position | null; etf: { nav: number | null; premium_pct: number | null; tracking_error: number | null; top_holdings: { name: string; weight: number }[] | null } | null };
 export type InstrumentHit = { ticker: string; name: string; kind: string; market: string | null };
-export type ChartPoint = { time: string; value: number };
-export type ChartBar = { time: string; open: number; high: number; low: number; close: number; volume: number; halted: boolean };
+export type ChartPoint = { time: Time; value: number };
+export type ChartBar = { time: Time; open: number; high: number; low: number; close: number; volume: number; halted: boolean };
 export type ChartIndicatorParams = { maPeriods: number[]; rsiPeriod: number; macdFast: number; macdSlow: number; macdSignal: number; bbPeriod: number; bbK: number; volumeMaPeriod: number };
-export type BarsResponse = { ticker: string; adjusted: boolean; price_jump_flag: boolean; bars: ChartBar[]; overlays: Record<string, ChartPoint[]>; rsi?: ChartPoint[]; macd?: Record<string, ChartPoint[]>; bb?: Record<string, ChartPoint[]>; volume_ma?: ChartPoint[] };
+export type ChartSource = 'local' | 'alphasquare';
+export type ChartFreq = 'minute-1' | 'minute-3' | 'minute-5' | 'minute-15' | 'minute-30' | 'minute-60' | 'day';
+export type BarsResponse = { ticker: string; adjusted: boolean; price_jump_flag: boolean; bars: ChartBar[]; overlays: Record<string, ChartPoint[]>; rsi?: ChartPoint[]; macd?: Record<string, ChartPoint[]>; bb?: Record<string, ChartPoint[]>; volume_ma?: ChartPoint[]; source: ChartSource; freq: ChartFreq | null };
 export type Position = { ticker: string; name: string; quantity: number; cost: number; avg_cost: number; last_close: number | null; market_value: number; unrealized: number; unrealized_pct: number | null; day_change: number; weight: number; stale: boolean };
 export type PortfolioData = { positions: Position[]; total_market_value: number; total_cost: number; total_unrealized: number; total_unrealized_pct: number | null; total_realized: number; total_day_change: number; cash_krw: number; total_assets: number; stale: boolean };
 export type Trade = { id: number; ticker: string; name: string | null; side: 'buy' | 'sell'; trade_date: string; quantity: number; price: number; fee: number; tax: number; memo: string | null };
@@ -132,7 +135,7 @@ const request = async <T>(path: string, init?: RequestInit, options?: RequestOpt
   if (!response.ok) throw new Error(detailMessage((await response.json().catch(() => ({}))).detail, response.status));
   return response.status === 204 ? undefined as T : response.json();
 };
-const barsPath = (ticker: string, range: string, indicators: string[], config: ChartIndicatorParams) => { const query = new URLSearchParams({ range, indicators: indicators.join(','), ma_periods: config.maPeriods.join(','), rsi_period: String(config.rsiPeriod), macd_fast: String(config.macdFast), macd_slow: String(config.macdSlow), macd_signal: String(config.macdSignal), bb_period: String(config.bbPeriod), bb_k: String(config.bbK), volume_ma_period: String(config.volumeMaPeriod) }); return `/api/instruments/${ticker}/bars?${query}`; };
+const barsPath = (ticker: string, range: string, source: ChartSource, freq: ChartFreq, count: number, indicators: string[], config: ChartIndicatorParams) => { const query = new URLSearchParams({ range, source, freq, count: String(count), indicators: indicators.join(','), ma_periods: config.maPeriods.join(','), rsi_period: String(config.rsiPeriod), macd_fast: String(config.macdFast), macd_slow: String(config.macdSlow), macd_signal: String(config.macdSignal), bb_period: String(config.bbPeriod), bb_k: String(config.bbK), volume_ma_period: String(config.volumeMaPeriod) }); return `/api/instruments/${ticker}/bars?${query}`; };
 
 export const api = {
   meta: () => request<Meta>('/api/meta'),
@@ -146,7 +149,7 @@ export const api = {
   deleteIndicator: (id: number) => request<void>(`/api/indicators/${id}`, { method: 'DELETE' }),
   instrument: (ticker: string) => request<Instrument>(`/api/instruments/${ticker}`),
   searchInstruments: (q: string) => request<InstrumentHit[]>(`/api/instruments/search?q=${encodeURIComponent(q)}`),
-  bars: (ticker: string, range: string, indicators: string[], config: ChartIndicatorParams) => request<BarsResponse>(barsPath(ticker, range, indicators, config)),
+  bars: (ticker: string, range: string, source: ChartSource, freq: ChartFreq, count: number, indicators: string[], config: ChartIndicatorParams) => request<BarsResponse>(barsPath(ticker, range, source, freq, count, indicators, config)),
   portfolio: () => request<PortfolioData>('/api/portfolio'),
   trades: () => request<Trade[]>('/api/trades'),
   addTrade: (trade: Omit<Trade, 'id' | 'name'>) => request<{ id: number }>('/api/trades', { method: 'POST', body: JSON.stringify(trade) }),
