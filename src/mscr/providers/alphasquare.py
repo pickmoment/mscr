@@ -232,6 +232,9 @@ class AlphaSquareProvider:
         분봉(`freq`가 `minute-`로 시작)의 시간은 KST 벽시계 값을 그대로 UTC epoch초로 인코딩한다.
         lightweight-charts는 숫자 시간을 항상 UTC로 표시하므로, 그렇게 해야 화면에 KST 시각이 그대로
         보인다(진짜 UTC로 보내면 9시간 밀려 보인다). 일봉은 기존 일봉 경로와 동일하게 날짜 문자열을 쓴다.
+
+        `freq`가 `day`면 오늘 봉을 `_today_bar`로 보충한다 — alpha-square의 일봉 캔들 API는 장이 끝난
+        완결된 거래일까지만 주고 장중인 오늘 봉은 절대 내려주지 않는다(실측 확인).
         """
         stock_id = self._resolve(ticker)
         if stock_id is None:
@@ -256,7 +259,26 @@ class AlphaSquareProvider:
             kst = pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(KST).tz_localize(None)
             date_value = int(kst.value // 10**9) if intraday else kst.strftime("%Y-%m-%d")
             out.append({"date": date_value, "open": row[1], "high": row[2], "low": row[3], "close": row[4], "volume": row[5]})
+        if freq == "day":
+            today_bar = self._today_bar(stock_id)
+            if today_bar is not None and (not out or out[-1]["date"] != today_bar["date"]):
+                out.append(today_bar)
         return pd.DataFrame(out, columns=["date", "open", "high", "low", "close", "volume"])
+
+    def _today_bar(self, stock_id: int) -> dict[str, Any] | None:
+        """alpha-square 일봉 캔들 API는 완결된 거래일까지만 주므로, 장중인 오늘 봉은 1분봉을 따로 조회해
+        오늘 날짜(KST)의 봉만 골라 시가·고가·저가·종가·거래량으로 직접 합성한다. 주말은 장이 없으니
+        조회 자체를 건너뛴다(공휴일은 걸러도 1분봉이 비어 있어 그대로 None을 반환한다)."""
+        now_kst = pd.Timestamp.now(tz="UTC").tz_convert(KST)
+        if now_kst.weekday() >= 5:
+            return None
+        today = now_kst.strftime("%Y-%m-%d")
+        payload = self._get(f"/data/v3/prices/candles/{stock_id}", {"freq": "minute-1", "limit": CANDLE_PAGE_LIMIT, "end": int(now_kst.timestamp() * 1000)})
+        today_rows = [row for row in (payload.get("data") or []) if len(row) >= 6 and pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(KST).strftime("%Y-%m-%d") == today]
+        if not today_rows:
+            return None
+        today_rows.sort(key=lambda row: row[0])
+        return {"date": today, "open": today_rows[0][1], "high": max(row[2] for row in today_rows), "low": min(row[3] for row in today_rows), "close": today_rows[-1][4], "volume": sum(row[5] for row in today_rows)}
 
     def _range_bars(self, stock_id: int, start: str, end: str) -> list[dict[str, Any]]:
         """[start, end] 구간의 일봉을 반환한다. 캔들 API가 요청당 최대 1000봉만 주므로,
