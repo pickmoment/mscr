@@ -176,7 +176,7 @@ def delete_screen(screen_id: int):
 def indicators():
     fields_by_key = {key: spec for key, spec in FIELDS.items()}
     inputs = [{"id": None, "key": key, "label": fields_by_key[key].label_ko, "unit": fields_by_key[key].unit, "formula": None, "parameters": [], "enabled": True, "builtin": True, "series": key in SERIES_NAMES, "kind": fields_by_key[key].kind, "created_at": None, "updated_at": None} for key in fields_by_key if key in SCREEN_NAMES]
-    functions = [{"id": None, "key": item["key"], "label": item["label"], "unit": "number", "formula": item["signature"], "parameters": [{"name": "period", "default": 20, "min": 1, "max": 10000, "integer": True}] if item["key"] in {"sma", "ema", "rsi", "returns", "prior_avg_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min"} else [], "enabled": True, "builtin": True, "series": False, "kind": "function", "created_at": None, "updated_at": None} for item in BUILTIN_CATALOG]
+    functions = [{"id": None, "key": item["key"], "label": item["label"], "unit": "number", "formula": item["signature"], "parameters": [{"name": "period", "default": 20, "min": 1, "max": 10000, "integer": True}] if item["key"] in {"sma", "ema", "rsi", "returns", "prior_avg_ratio", "obv", "obv_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min"} else [], "enabled": True, "builtin": True, "series": False, "kind": "function", "created_at": None, "updated_at": None} for item in BUILTIN_CATALOG]
     custom = [item | {"builtin": False, "series": False, "kind": "function"} for item in custom_definitions(enabled_only=False)]
     return inputs + functions + custom
 

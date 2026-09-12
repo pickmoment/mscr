@@ -126,7 +126,7 @@ uv run mscr ingest
 
 호출된 지표는 호출한 지표의 파라미터를 볼 수 없습니다. 각 정의는 시세·스냅샷 값과 자기 파라미터만 보는 독립된 범위입니다.
 
-내장 지표도 `ma20`, `rsi14` 같은 고정 별칭 없이 파라미터형 함수로 사용합니다. 지원 함수는 `sma`, `ema`, `rsi`, `returns`, `volume_ratio`, `historical_volatility`, `atr`, `rolling_max`, `rolling_min`, `crosses_above`, `crosses_below`, `abs`입니다.
+내장 지표도 `ma20`, `rsi14` 같은 고정 별칭 없이 파라미터형 함수로 사용합니다. 지원 함수는 `sma`, `ema`, `rsi`, `returns`, `prior_avg_ratio`, `obv`, `obv_ratio`, `historical_volatility`, `atr`, `slope`, `rolling_max`, `rolling_min`, `crosses_above`, `crosses_below`, `abs`입니다.
 
 스크리너 조건과 정렬은 각각 수식으로 작성합니다. 비교식은 `and`, `or`, `not`으로 조합할 수 있으며 모든 기간은 호출부에서 선택합니다.
 

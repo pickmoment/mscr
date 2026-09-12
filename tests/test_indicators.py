@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, prior_avg_ratio, rsi, slope, sma
+from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, rsi, slope, sma
 
 
 def test_sma_and_ema_conventions():
@@ -32,6 +32,34 @@ def test_bollinger_population_std_and_hv_sample_std():
 
 def test_prior_avg_ratio_excludes_current_volume():
     assert prior_avg_ratio(pd.Series([10, 10, 10, 10, 10, 50]), 5).iloc[-1] == 5.0
+
+
+def test_obv_signs_volume_by_close_direction_and_ignores_flat_bars():
+    close = pd.Series([10.0, 11.0, 10.0, 10.0, 12.0])
+    volume = pd.Series([100.0, 200.0, 300.0, 400.0, 500.0])
+    # 첫 봉은 직전 종가가 없어 빠지고, 보합 봉(400)은 0으로 들어간다: 200 - 300 + 0 + 500
+    assert obv(close, volume, 4).iloc[-1] == 400.0
+    assert pd.isna(obv(close, volume, 5).iloc[-1])
+
+
+def test_obv_ratio_normalizes_by_the_same_bars_as_the_numerator():
+    close = pd.Series([10.0, 11.0, 12.0, 11.0])
+    volume = pd.Series([999.0, 100.0, 100.0, 100.0])
+    # 분모는 첫 봉의 999를 제외한 300이어야 한다: (100 + 100 - 100) / 300
+    assert obv_ratio(close, volume, 3).iloc[-1] == pytest.approx(1 / 3)
+
+
+def test_obv_ratio_bounds_are_reached_by_one_sided_windows():
+    rising = pd.Series([10.0, 11.0, 12.0, 13.0])
+    falling = pd.Series([13.0, 12.0, 11.0, 10.0])
+    volume = pd.Series([100.0] * 4)
+    assert obv_ratio(rising, volume, 3).iloc[-1] == 1.0
+    assert obv_ratio(falling, volume, 3).iloc[-1] == -1.0
+
+
+def test_obv_ratio_is_undefined_when_the_window_has_no_volume():
+    close = pd.Series([10.0, 11.0, 12.0, 13.0])
+    assert pd.isna(obv_ratio(close, pd.Series([0.0] * 4), 3).iloc[-1])
 
 
 def test_slope_normalizes_linear_series_by_window_mean():

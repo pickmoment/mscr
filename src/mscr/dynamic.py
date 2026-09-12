@@ -10,18 +10,20 @@ import numpy as np
 import pandas as pd
 
 from .db import db_session
-from .indicators import atr, crosses, ema, historical_volatility, prior_avg_ratio, returns, rsi, slope, sma
+from .indicators import atr, crosses, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, returns, rsi, slope, sma
 
 SERIES_NAMES = {"open", "high", "low", "close", "volume", "value"}
 SCALAR_NAMES = {"market_cap", "shares", "per", "pbr", "eps", "bps", "div", "change_pct", "bars_available", "halted", "price_jump_flag", "weighted_return"}
 SCREEN_NAMES = SERIES_NAMES | SCALAR_NAMES
-BUILTIN_FUNCTIONS = {"sma", "ema", "rsi", "returns", "prior_avg_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min", "crosses_above", "crosses_below", "abs"}
+BUILTIN_FUNCTIONS = {"sma", "ema", "rsi", "returns", "prior_avg_ratio", "obv", "obv_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min", "crosses_above", "crosses_below", "abs"}
 BUILTIN_CATALOG = [
     {"key": "sma", "label": "단순 이동평균", "signature": "sma(series, period)"},
     {"key": "ema", "label": "지수 이동평균", "signature": "ema(series, period)"},
     {"key": "rsi", "label": "RSI", "signature": "rsi(close, period)"},
     {"key": "returns", "label": "기간 수익률", "signature": "returns(close, period)"},
     {"key": "prior_avg_ratio", "label": "직전 평균 대비 비율", "signature": "prior_avg_ratio(series, period)"},
+    {"key": "obv", "label": "롤링 OBV", "signature": "obv(close, volume, period)"},
+    {"key": "obv_ratio", "label": "롤링 OBV 비율", "signature": "obv_ratio(close, volume, period)"},
     {"key": "historical_volatility", "label": "실현 변동성", "signature": "historical_volatility(close, period)"},
     {"key": "atr", "label": "ATR", "signature": "atr(high, low, close, period)"},
     {"key": "slope", "label": "정규화 회귀 기울기", "signature": "slope(series, period)"},
@@ -146,6 +148,8 @@ def _evaluate(node: ast.AST, env: dict[str, Any], custom: dict[str, dict[str, An
             "rsi": lambda series, period: rsi(series, _period(period)),
             "returns": lambda series, period: returns(series, _period(period)),
             "prior_avg_ratio": lambda series, period: prior_avg_ratio(series, _period(period)),
+            "obv": lambda close, volume, period: obv(close, volume, _period(period)),
+            "obv_ratio": lambda close, volume, period: obv_ratio(close, volume, _period(period)),
             "historical_volatility": lambda series, period: historical_volatility(series, _period(period)),
             "atr": lambda high, low, close, period: atr(high, low, close, _period(period)),
             "slope": lambda series, period: slope(series, _period(period)),

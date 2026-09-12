@@ -128,6 +128,29 @@ def prior_avg_ratio(volume: pd.Series, n: int) -> pd.Series:
     return values.where(denominator > 0) / denominator.where(denominator > 0)
 
 
+def _signed_volume(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """전일 대비 오른 봉은 +거래량, 내린 봉은 -거래량, 보합은 0. 직전 종가나 거래량이 없는
+    봉은 NaN으로 남겨 롤링 창에서 통째로 제외한다."""
+    c, v = _valid(_series(close)), _valid(_series(volume))
+    return np.sign(c.diff()) * v
+
+
+def obv(close: pd.Series, volume: pd.Series, n: int) -> pd.Series:
+    """롤링 OBV: 최근 n봉의 부호 거래량 합(상승일 거래량 - 하락일 거래량). 시작 시점부터
+    무한 누적하는 원본 OBV와 달리 창이 고정돼 있어 관측 시작점에 값이 좌우되지 않는다."""
+    return _signed_volume(close, volume).rolling(n, min_periods=n).sum()
+
+
+def obv_ratio(close: pd.Series, volume: pd.Series, n: int) -> pd.Series:
+    """롤링 OBV를 같은 창의 총거래량으로 나눈 -1~+1 값. 거래량 규모가 달라도 종목 간 비교가
+    되므로 정렬 기준으로 쓸 수 있다. +0.4는 최근 n봉 거래량의 순매수 편향이 40%라는 뜻이다."""
+    signed = _signed_volume(close, volume)
+    # 분자에 못 들어간 봉은 분모에서도 빼야 비율이 창 크기에 따라 희석되지 않는다.
+    total = _valid(_series(volume)).where(signed.notna())
+    denominator = total.rolling(n, min_periods=n).sum()
+    return signed.rolling(n, min_periods=n).sum() / denominator.where(denominator > 0)
+
+
 def slope(close: pd.Series, n: int) -> pd.Series:
     values = _series(close)
     x = np.arange(n, dtype=float) - (n - 1) / 2
