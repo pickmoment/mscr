@@ -67,7 +67,11 @@ def ingest(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     if capture:
-        result = capture_signals(offsets=[0])
+        typer.echo("signals: 프리셋 평가 시작...", err=True)
+        result = capture_signals(
+            offsets=[0],
+            on_progress=lambda done, total, label: typer.echo(f"signals [{done}/{total}] {label}", err=True),
+        )
         typer.echo(f"signals: {result['dates']}일 수집, 신호 {result['rows']}건 (건너뜀 {result['skipped']})")
 
 
@@ -316,11 +320,11 @@ app.add_typer(signals_app, name="signals")
 def signals_capture(
     days: int = typer.Option(1, "--days", min=1, max=1000, help="최신 거래일부터 거슬러 올라갈 거래일 수."),
     force: bool = typer.Option(False, "--force", help="이미 수집한 날짜도 다시 계산합니다."),
-    screen: list[int] = typer.Option(None, "--screen", help="프리셋 id로 제한합니다."),
+    screen: list[int] | None = typer.Option(None, "--screen", help="프리셋 id로 제한합니다."),
 ) -> None:
     """Run saved presets over past trading days and store which tickers matched."""
     from .signals import capture
-    result = capture(screen_ids=list(screen) or None, offsets=range(days), force=force,
+    result = capture(screen_ids=screen or None, offsets=range(days), force=force,
                      on_progress=lambda done, total, label: typer.echo(f"  [{done}/{total}] {label}"))
     typer.echo(f"captured: 프리셋 {result['screens']}개 · {result['dates']}일 · 신호 {result['rows']}건 (건너뜀 {result['skipped']})")
 
