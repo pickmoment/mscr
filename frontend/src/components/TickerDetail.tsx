@@ -60,7 +60,7 @@ const FREQ_VALUES = FREQ_OPTIONS.map(option => option.value);
 const ALPHASQUARE_DEFAULT_COUNT = 1000;
 const ALPHASQUARE_COUNT_STEP = 1000;
 const ALPHASQUARE_MAX_COUNT = 5000;
-type ChartSettings = { range: string; source: ChartSource; freq: ChartFreq; enabled: string[]; config: ChartIndicatorParams; plots: ChartPlotSpec[]; showParams: boolean };
+type ChartSettings = { range: string; source: ChartSource; freq: ChartFreq; enabled: string[]; config: ChartIndicatorParams; plots: ChartPlotSpec[]; logScale: boolean; showParams: boolean };
 const loadChartSettings = (): ChartSettings => {
   try {
     const saved = JSON.parse(localStorage.getItem(CHART_SETTINGS_KEY) || 'null');
@@ -71,10 +71,11 @@ const loadChartSettings = (): ChartSettings => {
       enabled: Array.isArray(saved?.enabled) ? saved.enabled : defaultEnabled,
       config: { ...defaultConfig, ...saved?.config },
       plots: Array.isArray(saved?.plots) ? saved.plots.slice(0, MAX_PLOTS).map(normalizePlot) : [],
+      logScale: saved?.logScale === true,
       showParams: typeof saved?.showParams === 'boolean' ? saved.showParams : true,
     };
   } catch {
-    return { range: '1y', source: 'local', freq: 'minute-5', enabled: defaultEnabled, config: defaultConfig, plots: [], showParams: true };
+    return { range: '1y', source: 'local', freq: 'minute-5', enabled: defaultEnabled, config: defaultConfig, plots: [], logScale: false, showParams: true };
   }
 };
 
@@ -91,6 +92,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const [enabled, setEnabled] = useState(() => loadChartSettings().enabled);
   const [config, setConfig] = useState(() => loadChartSettings().config);
   const [plots, setPlots] = useState(() => loadChartSettings().plots);
+  const [logScale, setLogScale] = useState(() => loadChartSettings().logScale);
   const [definitions, setDefinitions] = useState<IndicatorDefinition[]>([]);
   const [showParams, setShowParams] = useState(() => loadChartSettings().showParams);
   const [lists, setLists] = useState<Watchlist[]>([]);
@@ -122,7 +124,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   useEffect(() => { const timer = setTimeout(() => setSettledPlotQuery(plotQuery), 400); return () => clearTimeout(timer); }, [plotQuery]);
   const loadChart = useCallback(() => { if (ticker) api.bars(ticker, range, source, freq, count, enabled, config, settledPlotQuery).then(setChart).catch(() => setChart(null)); }, [ticker, range, source, freq, count, enabled, config, settledPlotQuery]);
   useEffect(loadChart, [loadChart]);
-  useEffect(() => { localStorage.setItem(CHART_SETTINGS_KEY, JSON.stringify({ range, source, freq, enabled, config, plots, showParams })); }, [range, source, freq, enabled, config, plots, showParams]);
+  useEffect(() => { localStorage.setItem(CHART_SETTINGS_KEY, JSON.stringify({ range, source, freq, enabled, config, plots, logScale, showParams })); }, [range, source, freq, enabled, config, plots, logScale, showParams]);
   useEffect(() => { api.indicators().then(setDefinitions).catch(() => undefined); }, []);
   useEffect(loadLists, [loadLists]);
   useEffect(() => { window.addEventListener('mscr-watchlist-changed', loadLists); return () => window.removeEventListener('mscr-watchlist-changed', loadLists); }, [loadLists]);
@@ -215,8 +217,8 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
       </div>
     </div>
     <div className="panel chart-box">
-      <div className="toolbar"><div className="segmented">{(['local', 'alphasquare'] as const).map(item => <button key={item} className="btn" aria-pressed={source === item} onClick={() => setSource(item)} title={item === 'alphasquare' ? 'alphasquare.co.kr 비공식 API로 분봉까지 봅니다(수정주가 아님, 참고용)' : '로컬 DB(일봉 EOD) 기준'}>{item === 'local' ? '로컬' : '실시간'}</button>)}</div><div className="segmented">{source === 'local' ? ['3m', '6m', '1y', '3y', 'max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>) : FREQ_OPTIONS.map(option => <button key={option.value} className="btn" aria-pressed={freq === option.value} onClick={() => setFreq(option.value)}>{option.label}</button>)}</div>{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" onClick={loadChart} title="alpha-square에서 최신 캔들을 다시 불러옵니다(자동 갱신 없음)">새로고침</button>}{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" disabled={count >= ALPHASQUARE_MAX_COUNT} onClick={() => setCount(current => Math.min(ALPHASQUARE_MAX_COUNT, current + ALPHASQUARE_COUNT_STEP))} title={count >= ALPHASQUARE_MAX_COUNT ? `한 번에 가져올 수 있는 최대 봉수(${ALPHASQUARE_MAX_COUNT})에 닿았습니다` : 'alpha-square에서 더 과거의 캔들을 이어붙여 불러옵니다'}>이전 데이터 더보기</button>}<button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><button className="btn btn--ghost" aria-pressed={measure === 'bars'} onClick={() => setMeasure(current => current === 'bars' ? 'off' : 'bars')} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">봉구간 측정</button><button className="btn btn--ghost" aria-pressed={measure === 'lines'} onClick={() => setMeasure(current => current === 'lines' ? 'off' : 'lines')} title="차트에서 가격 두 곳을 클릭하면 가로선 두 개를 긋고 그 상하폭을 금액·비율로 표시합니다">선구간 측정</button><span className="subtle push" title={source === 'alphasquare' ? 'alphasquare.co.kr의 비공식 내부 API입니다 — 공식 데이터가 아니므로 참고용으로만 활용하세요. 수정주가가 아니며, 자동 갱신 없이 새로고침 버튼으로만 다시 불러옵니다.' : undefined}>{source === 'alphasquare' ? `실시간(비공식) · ${FREQ_OPTIONS.find(option => option.value === freq)?.label ?? freq}` : chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
-      <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} measure={measure} plotStyles={plots} onLastBarChange={setViewportLastBar} /></div>
+      <div className="toolbar"><div className="segmented">{(['local', 'alphasquare'] as const).map(item => <button key={item} className="btn" aria-pressed={source === item} onClick={() => setSource(item)} title={item === 'alphasquare' ? 'alphasquare.co.kr 비공식 API로 분봉까지 봅니다(수정주가 아님, 참고용)' : '로컬 DB(일봉 EOD) 기준'}>{item === 'local' ? '로컬' : '실시간'}</button>)}</div><div className="segmented">{source === 'local' ? ['3m', '6m', '1y', '3y', 'max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>) : FREQ_OPTIONS.map(option => <button key={option.value} className="btn" aria-pressed={freq === option.value} onClick={() => setFreq(option.value)}>{option.label}</button>)}</div>{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" onClick={loadChart} title="alpha-square에서 최신 캔들을 다시 불러옵니다(자동 갱신 없음)">새로고침</button>}{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" disabled={count >= ALPHASQUARE_MAX_COUNT} onClick={() => setCount(current => Math.min(ALPHASQUARE_MAX_COUNT, current + ALPHASQUARE_COUNT_STEP))} title={count >= ALPHASQUARE_MAX_COUNT ? `한 번에 가져올 수 있는 최대 봉수(${ALPHASQUARE_MAX_COUNT})에 닿았습니다` : 'alpha-square에서 더 과거의 캔들을 이어붙여 불러옵니다'}>이전 데이터 더보기</button>}<button className="btn btn--ghost" aria-pressed={logScale} onClick={() => setLogScale(current => !current)} title="가격 축을 로그 눈금으로 바꿉니다 — 등락률이 같으면 같은 높이로 보여 오래된 구간과 최근 구간의 움직임을 나란히 비교할 수 있습니다. 거래량과 보조판은 일반 눈금 그대로입니다.">로그</button><button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><button className="btn btn--ghost" aria-pressed={measure === 'bars'} onClick={() => setMeasure(current => current === 'bars' ? 'off' : 'bars')} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">봉구간 측정</button><button className="btn btn--ghost" aria-pressed={measure === 'lines'} onClick={() => setMeasure(current => current === 'lines' ? 'off' : 'lines')} title="차트에서 가격 두 곳을 클릭하면 가로선 두 개를 긋고 그 상하폭을 금액·비율로 표시합니다">선구간 측정</button><span className="subtle push" title={source === 'alphasquare' ? 'alphasquare.co.kr의 비공식 내부 API입니다 — 공식 데이터가 아니므로 참고용으로만 활용하세요. 수정주가가 아니며, 자동 갱신 없이 새로고침 버튼으로만 다시 불러옵니다.' : undefined}>{source === 'alphasquare' ? `실시간(비공식) · ${FREQ_OPTIONS.find(option => option.value === freq)?.label ?? freq}` : chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
+      <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} measure={measure} plotStyles={plots} logScale={logScale} onLastBarChange={setViewportLastBar} /></div>
     </div></div><aside className="panel sidebar scroll">{plan && <PositionPlanner plan={plan} ticker={detail.ticker} name={detail.name} kind={detail.kind} onChange={savePlan} onReset={() => savePlan(freshPlan())} onClose={() => savePlan(null)} />}<div className="toolbar"><div className="section-title">지표 설정</div><button className="btn btn--quiet btn--sm push" aria-expanded={showParams} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>
     {showParams && <>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('ma')} onChange={() => toggle('ma')} />이동평균</label><div className="parameter-inputs">{config.maPeriods.map((period, index) => <input key={index} aria-label={`이동평균 기간 ${index + 1}`} type="number" min="1" value={period} onChange={event => setConfig(current => ({ ...current, maPeriods: current.maPeriods.map((value, position) => position === index ? Number(event.target.value) : value) }))} />)}</div></div>

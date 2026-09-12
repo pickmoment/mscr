@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
+import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
 import { BarsResponse, ChartBar, ChartPlotSpec } from '../lib/api';
 import { compactVolume, won } from '../lib/format';
 import { MeasureBar, MeasureMode, MeasureRange, MeasureSpan, MeasureTool, SpanTool } from '../lib/measure';
 import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
 import { alpha, readTokens, UI_FONT } from '../lib/tokens';
 
-type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void; measure: MeasureMode; plotStyles: ChartPlotSpec[]; onLastBarChange?: (bar: ChartBar | null) => void };
+type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void; measure: MeasureMode; plotStyles: ChartPlotSpec[]; logScale: boolean; onLastBarChange?: (bar: ChartBar | null) => void };
 
 // 오버레이·MACD는 가격 방향이 아니라 서로를 구분하는 색이라 상승/하락 토큰을 쓰면 안 된다.
 const SERIES = ['#f5c451', '#5ba7ff', '#c08aff', '#39c6b5', '#ff8f70'];
@@ -25,7 +25,7 @@ const formatBarTime = (time: Time): string => {
 
 type Hover = { bar: ChartBar; prevClose: number | null; x: number; y: number; width: number; height: number };
 
-export default function TickerChart({ data, light, plan, kind, onPlanChange, measure, plotStyles, onLastBarChange }: Props) {
+export default function TickerChart({ data, light, plan, kind, onPlanChange, measure, plotStyles, logScale, onLastBarChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   // 크로스헤어가 가리키는 봉 + 그 봉을 담은 툴팁을 마우스 옆 어디에 띄울지 정할 좌표/패널 크기.
   const [hover, setHover] = useState<Hover | null>(null);
@@ -75,6 +75,8 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
   const plotStylesRef = useRef(plotStyles);
   plotStylesRef.current = plotStyles;
   const plotStyleKey = JSON.stringify(plotStyles.map(item => [item.id, item.label, item.pane, item.style, item.color]));
+  // 로그 눈금은 차트를 다시 만들지 않고 가격 축 옵션만 바꾼다 — 껐다 켤 때마다 줌이 풀리면 못 쓴다.
+  const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   useEffect(() => {
     if (!ref.current || !data || !data.bars.length) return;
     const t = readTokens();
@@ -86,6 +88,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     if (data.volume_ma) { const volumeMa = chart.addSeries(LineSeries, { priceScaleId: 'volume', color: t.ok, lineWidth: 2, priceLineVisible: false, lastValueVisible: false }, 0); volumeMa.setData(data.volume_ma); }
     chart.priceScale('right', 0).applyOptions({ scaleMargins: { top: 0.05, bottom: 0.22 } });
+    chartRef.current = chart;
     Object.entries(data.overlays).forEach(([key, points], index) => { const line = chart.addSeries(LineSeries, { title: key.toUpperCase(), priceScaleId: 'right', color: SERIES[index % SERIES.length], lineWidth: 1 }, 0); line.setData(points); });
     if (data.bb) for (const key of ['upper', 'lower']) { const line = chart.addSeries(LineSeries, { priceScaleId: 'right', color: t.text3, lineWidth: 1, lineStyle: LineStyle.Dashed }, 0); line.setData(data.bb[key] || []); }
     if (data.rsi) {
@@ -202,6 +205,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
       chart.unsubscribeCrosshairMove(onCrosshair);
       chart.unsubscribeClick(onClick);
       timeScale.unsubscribeVisibleLogicalRangeChange(onVisibleRange);
+      chartRef.current = null;
       zonesRef.current = null;
       measureToolRef.current = null;
       spanToolRef.current = null;
@@ -212,6 +216,11 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
       setSpan(null);
     };
   }, [data, light, plotStyleKey]);
+  // 보조판(RSI·MACD·수식 지표)은 음수를 담을 수 있어 로그 눈금을 적용하지 않는다. 가격 축만 바꾼다.
+  // 판이 다 붙기 전에 눈금을 바꾸면 이후 addPane 이 레이아웃을 잘못 잡아 보조판이 잘린다. 그래서
+  // 차트를 만드는 effect 안이 아니라 그 다음에 도는 이 effect 에서 적용하고, 차트를 다시 만드는
+  // 조건(data·light·표시 설정)에도 함께 반응해 재생성 직후 다시 적용한다.
+  useEffect(() => { chartRef.current?.priceScale('right', 0).applyOptions({ mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal }); }, [logScale, data, light, plotStyleKey]);
   // 크로스헤어가 가리키는 봉에서 화면에 보이는 마지막 봉까지 가격이 얼마나 움직였는지 — "여기서 들어갔으면 지금은?" 감을 잡는 용도.
   const toLast = hover && lastBar && hover.bar.time !== lastBar.time && hover.bar.close ? (lastBar.close / hover.bar.close - 1) * 100 : null;
   const barPct = hover && hover.prevClose ? (hover.bar.close / hover.prevClose - 1) * 100 : null;
