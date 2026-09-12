@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
 import { BarsResponse, ChartBar, ChartPlotSpec } from '../lib/api';
 import { compactVolume, money } from '../lib/format';
+import { marketInfo } from '../lib/market';
 import { MeasureBar, MeasureMode, MeasureRange, MeasureSpan, MeasureTool, SpanTool } from '../lib/measure';
 import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
 import { alpha, readTokens, UI_FONT } from '../lib/tokens';
@@ -81,7 +82,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     if (!ref.current || !data || !data.bars.length) return;
     const t = readTokens();
     const chart = createChart(ref.current, { autoSize: true, layout: { background: { type: ColorType.Solid, color: t.surface }, textColor: t.text3, fontFamily: UI_FONT, fontSize: 12, attributionLogo: true, panes: { separatorColor: t.line, separatorHoverColor: t.line2, enableResize: true } }, grid: { vertLines: { color: t.line }, horzLines: { color: t.line } }, crosshair: { mode: CrosshairMode.Normal }, localization: { locale: 'ko-KR', dateFormat: 'yyyy-MM-dd' }, timeScale: { timeVisible: true, secondsVisible: false } });
-    const candles = chart.addSeries(CandlestickSeries, { priceScaleId: 'right', priceFormat: { type: 'custom', minMove: 1, formatter: money }, upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false }, 0);
+    const candles = chart.addSeries(CandlestickSeries, { priceScaleId: 'right', priceFormat: { type: 'custom', minMove: marketInfo().currency === 'USD' ? 0.01 : 1, formatter: money }, upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false }, 0);
     candles.setData(data.bars.map(bar => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, color: bar.halted ? t.text3 : undefined, wickColor: bar.halted ? t.text3 : undefined, borderColor: bar.halted ? t.text3 : undefined })));
     const volume = chart.addSeries(HistogramSeries, { priceScaleId: 'volume', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 0);
     volume.setData(data.bars.map(bar => ({ time: bar.time, value: bar.volume, color: bar.close >= bar.open ? alpha(t.up, .47) : alpha(t.down, .47) })));

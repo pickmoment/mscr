@@ -325,3 +325,45 @@ def test_default_market_is_persisted_for_later_sessions(isolated_home):
     market.save_default("us")
     assert market.stored_default() == "us"
     assert market.active().key == "us"
+
+
+# --- alpha-square 실시간 차트 -------------------------------------------
+
+class _StubDb:
+    """`_resolve`가 쓰는 티커→stock_id 캐시만 흉내 낸다."""
+
+    def __init__(self, stock_id: int = 3549):
+        self.stock_id = stock_id
+
+    def execute(self, sql, params=()):
+        class _Cursor:
+            def __init__(self, row): self.row = row
+            def fetchone(self): return self.row
+        return _Cursor((self.stock_id,) if "alphasquare_ticker_map" in sql else None)
+
+
+def test_alphasquare_intraday_times_follow_the_market_clock(monkeypatch):
+    """분봉 시각은 그 시장의 장 시간대 벽시계로 찍힌다 — 미국 15:45 장중 봉이 KST 새벽으로 밀리면 안 된다."""
+    from mscr.providers.alphasquare import AlphaSquareProvider
+
+    # 1789155900000ms = UTC 19:45 = 뉴욕 15:45 = 서울 이튿날 04:45
+    payload = {"data": [[1789155900000.0, 332.6, 332.7, 332.4, 332.7, 380798.0]]}
+    for key, expected in (("us", "2026-09-11 15:45"), ("kr", "2026-09-12 04:45")):
+        with market.use(key):
+            provider = AlphaSquareProvider(_StubDb(), delay=0)
+            monkeypatch.setattr(provider, "_get", lambda path, params: payload)
+            frame = provider.candles("AAPL", "minute-5", count=1)
+            stamped = pd.Timestamp(int(frame.iloc[0]["date"]), unit="s", tz="UTC")
+            assert stamped.strftime("%Y-%m-%d %H:%M") == expected
+
+
+def test_alphasquare_daily_candles_keep_the_local_trading_date(monkeypatch):
+    from mscr.providers.alphasquare import AlphaSquareProvider
+
+    # 미국 일봉은 뉴욕 00:00(=UTC 04:00)으로 온다. 거래일 날짜가 그대로 남아야 한다.
+    payload = {"data": [[1789099200000.0, 327.45, 336.22, 326.3, 332.27, 50716865.0]]}
+    with market.use("us"):
+        provider = AlphaSquareProvider(_StubDb(), delay=0)
+        monkeypatch.setattr(provider, "_get", lambda path, params: payload)
+        monkeypatch.setattr(provider, "_today_bar", lambda stock_id: None)
+        assert provider.candles("AAPL", "day", count=1).iloc[0]["date"] == "2026-09-11"

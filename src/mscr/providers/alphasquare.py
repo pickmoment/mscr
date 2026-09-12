@@ -196,9 +196,15 @@ class AlphaSquareProvider:
     """
 
     def __init__(self, db: Any, delay: float | None = None):
+        from .. import market
+        from zoneinfo import ZoneInfo
+
         self.db = db
         self.delay = request_delay() if delay is None else delay
         self.session = requests.Session()
+        # 캔들 시각은 현재 시장의 장 시간대로 읽는다. 미국 분봉을 KST로 찍으면 09:30~16:00 장이
+        # 새벽 22:30~05:00으로 밀려 보인다.
+        self.tz = ZoneInfo(market.active().timezone)
 
     def _get(self, path: str, params: dict[str, Any]) -> Any:
         return _http_get(self.session, path, params, self.delay)
@@ -229,9 +235,9 @@ class AlphaSquareProvider:
         모아도 지표(이동평균 등)는 호출부가 합쳐진 프레임 전체로 한 번에 계산하므로 병합 경계에서 끊기지
         않는다.
 
-        분봉(`freq`가 `minute-`로 시작)의 시간은 KST 벽시계 값을 그대로 UTC epoch초로 인코딩한다.
-        lightweight-charts는 숫자 시간을 항상 UTC로 표시하므로, 그렇게 해야 화면에 KST 시각이 그대로
-        보인다(진짜 UTC로 보내면 9시간 밀려 보인다). 일봉은 기존 일봉 경로와 동일하게 날짜 문자열을 쓴다.
+        분봉(`freq`가 `minute-`로 시작)의 시간은 그 시장 장 시간대(한국 KST·미국 ET)의 벽시계 값을
+        그대로 UTC epoch초로 인코딩한다. lightweight-charts는 숫자 시간을 항상 UTC로 표시하므로, 그렇게
+        해야 화면에 현지 장 시각이 그대로 보인다. 일봉은 기존 일봉 경로와 동일하게 날짜 문자열을 쓴다.
 
         `freq`가 `day`면 오늘 봉을 `_today_bar`로 보충한다 — alpha-square의 일봉 캔들 API는 장이 끝난
         완결된 거래일까지만 주고 장중인 오늘 봉은 절대 내려주지 않는다(실측 확인).
@@ -256,8 +262,8 @@ class AlphaSquareProvider:
         intraday = freq.startswith("minute")
         out = []
         for row in (rows[key] for key in sorted(rows)):
-            kst = pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(KST).tz_localize(None)
-            date_value = int(kst.value // 10**9) if intraday else kst.strftime("%Y-%m-%d")
+            local = pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(self.tz).tz_localize(None)
+            date_value = int(local.value // 10**9) if intraday else local.strftime("%Y-%m-%d")
             out.append({"date": date_value, "open": row[1], "high": row[2], "low": row[3], "close": row[4], "volume": row[5]})
         if freq == "day":
             today_bar = self._today_bar(stock_id)
@@ -267,14 +273,14 @@ class AlphaSquareProvider:
 
     def _today_bar(self, stock_id: int) -> dict[str, Any] | None:
         """alpha-square 일봉 캔들 API는 완결된 거래일까지만 주므로, 장중인 오늘 봉은 1분봉을 따로 조회해
-        오늘 날짜(KST)의 봉만 골라 시가·고가·저가·종가·거래량으로 직접 합성한다. 주말은 장이 없으니
+        오늘 날짜(장 시간대 기준)의 봉만 골라 시가·고가·저가·종가·거래량으로 직접 합성한다. 주말은 장이 없으니
         조회 자체를 건너뛴다(공휴일은 걸러도 1분봉이 비어 있어 그대로 None을 반환한다)."""
-        now_kst = pd.Timestamp.now(tz="UTC").tz_convert(KST)
-        if now_kst.weekday() >= 5:
+        now_local = pd.Timestamp.now(tz="UTC").tz_convert(self.tz)
+        if now_local.weekday() >= 5:
             return None
-        today = now_kst.strftime("%Y-%m-%d")
-        payload = self._get(f"/data/v3/prices/candles/{stock_id}", {"freq": "minute-1", "limit": CANDLE_PAGE_LIMIT, "end": int(now_kst.timestamp() * 1000)})
-        today_rows = [row for row in (payload.get("data") or []) if len(row) >= 6 and pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(KST).strftime("%Y-%m-%d") == today]
+        today = now_local.strftime("%Y-%m-%d")
+        payload = self._get(f"/data/v3/prices/candles/{stock_id}", {"freq": "minute-1", "limit": CANDLE_PAGE_LIMIT, "end": int(now_local.timestamp() * 1000)})
+        today_rows = [row for row in (payload.get("data") or []) if len(row) >= 6 and pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(self.tz).strftime("%Y-%m-%d") == today]
         if not today_rows:
             return None
         today_rows.sort(key=lambda row: row[0])
@@ -283,7 +289,7 @@ class AlphaSquareProvider:
     def _range_bars(self, stock_id: int, start: str, end: str) -> list[dict[str, Any]]:
         """[start, end] 구간의 일봉을 반환한다. 캔들 API가 요청당 최대 1000봉만 주므로,
         구간이 그보다 길면(예: --days 3650) 과거 방향으로 페이지를 넘겨가며 이어붙인다."""
-        end_ms = int((pd.Timestamp(end).as_unit("ns").tz_localize(KST) + pd.Timedelta(days=1)).tz_convert("UTC").timestamp() * 1000) - 1
+        end_ms = int((pd.Timestamp(end).as_unit("ns").tz_localize(self.tz) + pd.Timedelta(days=1)).tz_convert("UTC").timestamp() * 1000) - 1
         bars: dict[str, dict[str, Any]] = {}
         cursor = end_ms
         for _ in range(10):
@@ -296,12 +302,12 @@ class AlphaSquareProvider:
                 break
             oldest_ms = min(int(row[0]) for row in page)
             for row in page:
-                bar_date = pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(KST).strftime("%Y-%m-%d")
+                bar_date = pd.Timestamp(int(row[0]), unit="ms", tz="UTC").tz_convert(self.tz).strftime("%Y-%m-%d")
                 if start <= bar_date <= end:
                     # alpha-square 캔들 API는 거래대금(value)을 주지 않는다. 종가×거래량 근사치로
                     # 채워, 스크리너의 유동성(value) 조건이 이 소스로 채운 날짜에서도 동작하게 한다.
                     bars[bar_date] = {"date": bar_date, "open": row[1], "high": row[2], "low": row[3], "close": row[4], "volume": row[5], "value": row[4] * row[5]}
-            oldest_date = pd.Timestamp(oldest_ms, unit="ms", tz="UTC").tz_convert(KST).strftime("%Y-%m-%d")
+            oldest_date = pd.Timestamp(oldest_ms, unit="ms", tz="UTC").tz_convert(self.tz).strftime("%Y-%m-%d")
             if oldest_date <= start or len(page) < 1000:
                 break
             cursor = oldest_ms - 1

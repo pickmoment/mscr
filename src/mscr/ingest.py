@@ -150,6 +150,13 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
     source = source or mkt.default_ingest_source
     if source not in mkt.ingest_sources:
         raise ValueError(f"{mkt.label} 주식 모드에서 지원하지 않는 소스입니다: {source} (가능: {', '.join(mkt.ingest_sources)})")
+    # 수집하는 동안은 컨텍스트도 이 시장으로 맞춰 둔다. 프로바이더(alpha-square 시간대 등)와
+    # 저장 경로가 인자로 받은 시장과 어긋나지 않게 한다.
+    with market.use(mkt.key):
+        _run_ingest(days=days, force=force, provider=provider, source=source, path=path, on_progress=on_progress, mkt=mkt)
+
+
+def _run_ingest(days: int, force: bool, provider, source: str, path, on_progress, mkt) -> None:
     if mkt.region == market.US.region:
         _run_ingest_massive(days=days, force=force, provider=provider, path=path, on_progress=on_progress)
         return

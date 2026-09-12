@@ -26,6 +26,7 @@ class Market:
     region: str                     # instruments.region
     bar_source: str                 # daily_bars.source
     currency: str
+    timezone: str                   # 장 시간 기준 시간대(분봉 시각 표시·당일 판정)
     exchanges: tuple[str, ...]      # 유니버스 필터에 쓰는 거래소 이름
     ingest_sources: tuple[str, ...]
     ingest_kinds: tuple[str, ...]   # ingest_runs.kind (시장끼리 겹치지 않게 둔다)
@@ -41,7 +42,7 @@ class Market:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "key": self.key, "label": self.label, "region": self.region, "currency": self.currency,
+            "key": self.key, "label": self.label, "region": self.region, "currency": self.currency, "timezone": self.timezone,
             "exchanges": list(self.exchanges), "ingest_sources": list(self.ingest_sources),
             "default_ingest_days": self.default_ingest_days, "trading": self.trading,
             "live_overview": self.live_overview, "fundamentals": self.fundamentals,
@@ -49,13 +50,13 @@ class Market:
 
 
 KR = Market(
-    key="kr", label="한국", region="KR", bar_source="krx_snapshot", currency="KRW",
+    key="kr", label="한국", region="KR", bar_source="krx_snapshot", currency="KRW", timezone="Asia/Seoul",
     exchanges=("KOSPI", "KOSDAQ", "KONEX"), ingest_sources=("krx", "fdr", "alphasquare"),
     ingest_kinds=("stock", "etf", "fundamental"), default_ingest_days=400, cash_key="cash_krw",
     trading=True, live_overview=True, fundamentals=True,
 )
 US = Market(
-    key="us", label="미국", region="US", bar_source="massive_snapshot", currency="USD",
+    key="us", label="미국", region="US", bar_source="massive_snapshot", currency="USD", timezone="America/New_York",
     exchanges=("NASDAQ", "NYSE", "AMEX", "CBOE", "OTHER"), ingest_sources=("massive",),
     ingest_kinds=("us_bars", "us_universe"), default_ingest_days=30, cash_key="cash_usd",
     trading=False, live_overview=False, fundamentals=False,

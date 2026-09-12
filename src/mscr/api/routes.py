@@ -412,8 +412,6 @@ def _chart_plots(spec: str, valid: pd.DataFrame) -> list[dict[str, Any]]:
 def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000), plots: str = Query("")):
     if source not in {"local", "alphasquare"}:
         raise HTTPException(422, "invalid source")
-    if source == "alphasquare" and market.active().region != market.KR.region:
-        raise HTTPException(409, "alpha-square 분봉 차트는 한국 주식 모드에서만 지원합니다")
     if source == "local" and range not in {"3m", "6m", "1y", "3y", "max"}:
         raise HTTPException(422, "invalid range")
     try:
@@ -427,7 +425,7 @@ def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), fr
         if freq not in CANDLE_FREQS:
             raise HTTPException(422, "invalid freq")
         with db_session() as db:
-            item = db.execute("SELECT kind FROM instruments WHERE ticker=?", (ticker,)).fetchone()
+            item = db.execute("SELECT kind FROM instruments WHERE ticker=? AND region=?", (ticker, market.region())).fetchone()
             if not item:
                 raise HTTPException(404, "instrument not found")
             frame = AlphaSquareProvider(db).candles(ticker, freq, count=count)
