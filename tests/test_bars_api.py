@@ -8,7 +8,7 @@ from mscr.db import db_session, init_db
 
 
 def _call(ticker: str, **overrides):
-    kwargs = dict(range="1y", source="local", freq="day", count=1000, indicators="ma,rsi,macd,bb", ma_periods="5,20,60", rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, bb_period=20, bb_k=2.0)
+    kwargs = dict(range="1y", source="local", freq="day", count=1000, indicators="ma,rsi,macd,bb", ma_periods="5,20,60", rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9, bb_period=20, bb_k=2.0, plots="")
     kwargs.update(overrides)
     return routes.bars(ticker, **kwargs)
 
@@ -168,3 +168,62 @@ def test_volume_ma_absent_when_not_requested(store, monkeypatch):
     result = _call("000001", indicators="ma")
 
     assert "volume_ma" not in result
+
+
+def _plot_store(store, monkeypatch):
+    with db_session(store) as db:
+        rows = [("000001", f"2026-01-{d:02d}", "krx_snapshot", 100.0, 101.0, 99.0, 100.0 + d, 1000.0, 100000.0, None, 0) for d in range(1, 6)]
+        db.executemany("INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
+    monkeypatch.setattr(routes, "KRXProvider", lambda: type("EmptyHistoryProvider", (), {"history": staticmethod(lambda *a, **k: pd.DataFrame())})())
+
+
+def test_chart_plots_evaluate_screener_formulas(store, monkeypatch):
+    _plot_store(store, monkeypatch)
+
+    result = _call("000001", indicators="", plots='[{"id":"p1","formula":"sma(close, 3)"}]')
+
+    points = {p["time"]: p["value"] for p in result["plots"][0]["points"]}
+    assert result["plots"][0]["error"] is None
+    assert "2026-01-02" not in points
+    assert points["2026-01-03"] == pytest.approx((101.0 + 102.0 + 103.0) / 3)
+
+
+def test_chart_plot_booleans_are_drawn_as_one_and_zero(store, monkeypatch):
+    _plot_store(store, monkeypatch)
+
+    result = _call("000001", indicators="", plots='[{"id":"p1","formula":"close > 103"}]')
+
+    points = {p["time"]: p["value"] for p in result["plots"][0]["points"]}
+    assert points["2026-01-03"] == 0.0 and points["2026-01-05"] == 1.0
+
+
+def test_one_broken_plot_does_not_blank_the_others(store, monkeypatch):
+    _plot_store(store, monkeypatch)
+
+    result = _call("000001", indicators="", plots='[{"id":"bad","formula":"nope(close)"},{"id":"ok","formula":"close"}]')
+
+    bad, ok = result["plots"]
+    assert bad["error"] and not bad["points"]
+    assert ok["error"] is None and len(ok["points"]) == 5
+
+
+def test_chart_plots_are_capped_and_reject_malformed_specs(store, monkeypatch):
+    _plot_store(store, monkeypatch)
+    too_many = ",".join(f'{{"id":"p{i}","formula":"close"}}' for i in range(routes.MAX_CHART_PLOTS + 1))
+
+    for spec in (f"[{too_many}]", "not json", '{"id":"p1"}', '[{"formula":"close"}]'):
+        with pytest.raises(routes.HTTPException) as error:
+            _call("000001", indicators="", plots=spec)
+        assert error.value.status_code == 422
+
+
+def test_series_without_any_value_is_reported_instead_of_drawn_blank(store, monkeypatch):
+    """수정주가 일봉에는 거래대금(value) 열이 있어도 값이 비어 있다. 빈 선을 그리는 대신 오류로 알린다."""
+    with db_session(store) as db:
+        rows = [("000001", f"2026-01-{d:02d}", "krx_snapshot", 100.0, 101.0, 99.0, 100.0, 1000.0, None, None, 0) for d in range(1, 6)]
+        db.executemany("INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
+    monkeypatch.setattr(routes, "KRXProvider", lambda: type("EmptyHistoryProvider", (), {"history": staticmethod(lambda *a, **k: pd.DataFrame())})())
+
+    result = _call("000001", indicators="", plots='[{"id":"p1","formula":"value"}]')
+
+    assert "value" in result["plots"][0]["error"]

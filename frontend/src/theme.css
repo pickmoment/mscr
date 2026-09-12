@@ -655,6 +655,14 @@ input[type='checkbox']:hover, input[type='radio']:hover { border: 0; }
 .indicator-control > .check { font-weight: 600; color: var(--text); }
 .indicator-control input[type='number'] { width: 72px; min-height: 28px; padding: 4px var(--s2); font-size: 12px; }
 .parameter-inputs { display: flex; gap: var(--s2); flex-wrap: wrap; }
+/* 수식 지표 행 — .indicator-control 은 내용 폭에 맞추지만 수식 칸은 사이드바 폭을 다 써야 한다. */
+.plot-row { justify-items: stretch; }
+.plot-row__head { display: flex; align-items: center; gap: var(--s2); width: 100%; }
+.plot-row__label { flex: 1; min-width: 0; min-height: 28px; padding: 4px var(--s2); font-size: 12px; font-weight: 600; }
+.plot-row input[type='color'] { flex: none; width: 28px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r1); background: var(--surface); cursor: pointer; }
+.plot-row select { min-height: 28px; padding: 2px var(--s2); font-size: 12px; }
+.plot-row .formula-input input { width: 100%; min-height: 28px; padding: 4px var(--s2); font: 12px var(--font-mono); }
+.plot-row .msg { margin: 0; font-size: 11px; }
 
 /* ============================================================
    12. Position planner

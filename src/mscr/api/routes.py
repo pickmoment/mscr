@@ -13,7 +13,7 @@ from .. import backtest, brief, ingest_job, jobs, review, risk, signals
 from ..broker.kis import CREDENTIAL_PATH as kis_credential_path
 from ..broker.kis import KISError, broker_from_config, broker_status, clear_credentials, save_credentials, set_active_env
 from ..db import db_session
-from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_NAMES, custom_definitions, formula_calls, ticker_snapshot, truncate_price_jump, validate_formula
+from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_NAMES, custom_definitions, evaluate_formula, formula_calls, ticker_snapshot, truncate_price_jump, validate_formula
 from ..indicators import bollinger_bands, macd, rsi, sma
 from .. import market_stats
 from .. import watchlist
@@ -290,8 +290,46 @@ def instrument(ticker: str):
                 pass
     return result
 
+MAX_CHART_PLOTS = 8
+
+
+def _chart_plots(spec: str, valid: pd.DataFrame) -> list[dict[str, Any]]:
+    """차트에 얹을 수식 지표를 스크리너와 같은 엔진으로 계산한다. 따라서 내장 함수도, 저장해 둔
+    사용자 지표도 그대로 쓸 수 있다. 화면 표시(색·판·선 모양)는 클라이언트가 들고 있고 여기서는
+    id로만 짝을 맞춘다."""
+    try:
+        items = json.loads(spec)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(422, "invalid plots") from exc
+    if not isinstance(items, list):
+        raise HTTPException(422, "invalid plots")
+    if len(items) > MAX_CHART_PLOTS:
+        raise HTTPException(422, f"plots must contain at most {MAX_CHART_PLOTS} items")
+    # 소스마다 쓸 수 있는 시리즈가 다르다 — 실시간 캔들에는 거래대금 열이 아예 없고, 수정주가
+    # 일봉에는 열은 있어도 값이 비어 있다. 값이 하나도 없는 시리즈는 빼서, 그 이름을 쓴 수식이
+    # 빈 선을 조용히 그리는 대신 "알 수 없는 이름"으로 걸리게 한다.
+    columns = {name: pd.to_numeric(valid[name], errors="coerce") for name in SERIES_NAMES if name in valid.columns}
+    env: dict[str, Any] = {name: pd.Series(series.to_numpy(dtype=float), index=valid["date"].tolist()) for name, series in columns.items() if series.notna().any()}
+    custom = custom_definitions()
+    plots: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("formula"), str):
+            raise HTTPException(422, "invalid plots")
+        # 수식 하나가 틀렸다고 차트를 통째로 비우지 않는다. 오류는 그 지표에만 붙여 돌려준다.
+        try:
+            values = evaluate_formula(item["formula"], env, custom)
+        except Exception as exc:
+            plots.append({"id": item["id"], "error": str(exc) or exc.__class__.__name__, "points": []})
+            continue
+        # 참/거짓 수식은 1·0으로 그린다 — 조건이 켜진 구간을 눈으로 보려는 용도.
+        if values.dtype != "float64":
+            values = values.astype(float)
+        plots.append({"id": item["id"], "error": None, "points": [{"time": index, "value": float(value)} for index, value in values.items() if pd.notna(value)]})
+    return plots
+
+
 @router.get("/instruments/{ticker}/bars")
-def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000)):
+def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000), plots: str = Query("")):
     if source not in {"local", "alphasquare"}:
         raise HTTPException(422, "invalid source")
     if source == "local" and range not in {"3m", "6m", "1y", "3y", "max"}:
@@ -374,6 +412,8 @@ def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), fr
     if "volume_ma" in requested:
         values = sma(series[4], volume_ma_period)
         output["volume_ma"] = [{"time": idx, "value": value} for idx, value in values.items() if pd.notna(value)]
+    if plots.strip():
+        output["plots"] = _chart_plots(plots, valid)
     return output
 
 @router.get("/market-stats/dates")

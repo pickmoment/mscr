@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
-import { BarsResponse, ChartBar } from '../lib/api';
+import { BarsResponse, ChartBar, ChartPlotSpec } from '../lib/api';
 import { compactVolume, won } from '../lib/format';
 import { MeasureBar, MeasureMode, MeasureRange, MeasureSpan, MeasureTool, SpanTool } from '../lib/measure';
 import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
 import { alpha, readTokens, UI_FONT } from '../lib/tokens';
 
-type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void; measure: MeasureMode; onLastBarChange?: (bar: ChartBar | null) => void };
+type Props = { data: BarsResponse | null; light: boolean; plan: PositionPlan | null; kind: string; onPlanChange: (plan: PositionPlan) => void; measure: MeasureMode; plotStyles: ChartPlotSpec[]; onLastBarChange?: (bar: ChartBar | null) => void };
 
 // 오버레이·MACD는 가격 방향이 아니라 서로를 구분하는 색이라 상승/하락 토큰을 쓰면 안 된다.
 const SERIES = ['#f5c451', '#5ba7ff', '#c08aff', '#39c6b5', '#ff8f70'];
@@ -25,7 +25,7 @@ const formatBarTime = (time: Time): string => {
 
 type Hover = { bar: ChartBar; prevClose: number | null; x: number; y: number; width: number; height: number };
 
-export default function TickerChart({ data, light, plan, kind, onPlanChange, measure, onLastBarChange }: Props) {
+export default function TickerChart({ data, light, plan, kind, onPlanChange, measure, plotStyles, onLastBarChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   // 크로스헤어가 가리키는 봉 + 그 봉을 담은 툴팁을 마우스 옆 어디에 띄울지 정할 좌표/패널 크기.
   const [hover, setHover] = useState<Hover | null>(null);
@@ -70,6 +70,11 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     if (measure !== 'bars') setMeasurePoints([]);
     if (measure !== 'lines') setSpan(null);
   }, [measure]);
+  // 수식 지표의 표시 설정. 색·판을 바꾸면 다시 그려야 하지만, 수식만 고친 경우는 새 데이터가
+  // 도착할 때 한 번만 그리면 된다 — 그래서 표시에 쓰는 필드만 골라 의존성 키를 만든다.
+  const plotStylesRef = useRef(plotStyles);
+  plotStylesRef.current = plotStyles;
+  const plotStyleKey = JSON.stringify(plotStyles.map(item => [item.id, item.label, item.pane, item.style, item.color]));
   useEffect(() => {
     if (!ref.current || !data || !data.bars.length) return;
     const t = readTokens();
@@ -96,6 +101,27 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
       line.setData(data.macd.macd || []);
       const signal = pane.addSeries(LineSeries, { priceScaleId: 'right', color: SERIES[0] });
       signal.setData(data.macd.signal || []);
+    }
+    // 같은 보조판(sub1~3)을 고른 수식 지표들은 한 판에 겹쳐 그려 서로 비교할 수 있게 한다.
+    const subPanes = new Map<string, ReturnType<typeof chart.addPane>>();
+    for (const plot of data.plots || []) {
+      const spec = plotStylesRef.current.find(item => item.id === plot.id);
+      if (!spec || !plot.points.length) continue;
+      const dashed = spec.style === 'dashed' ? LineStyle.Dashed : LineStyle.Solid;
+      if (spec.pane === 'price' || spec.pane === 'volume') {
+        const priceScaleId = spec.pane === 'price' ? 'right' : 'volume';
+        const overlay = spec.style === 'histogram'
+          ? chart.addSeries(HistogramSeries, { title: spec.label, priceScaleId, color: spec.color, priceLineVisible: false, lastValueVisible: false }, 0)
+          : chart.addSeries(LineSeries, { title: spec.label, priceScaleId, color: spec.color, lineWidth: 1, lineStyle: dashed, priceLineVisible: false, lastValueVisible: spec.pane === 'price' }, 0);
+        overlay.setData(plot.points);
+        continue;
+      }
+      let pane = subPanes.get(spec.pane);
+      if (!pane) { pane = chart.addPane(); subPanes.set(spec.pane, pane); }
+      const series = spec.style === 'histogram'
+        ? pane.addSeries(HistogramSeries, { title: spec.label, priceScaleId: 'right', color: spec.color })
+        : pane.addSeries(LineSeries, { title: spec.label, priceScaleId: 'right', color: spec.color, lineWidth: 2, lineStyle: dashed });
+      series.setData(plot.points);
     }
     const container = ref.current;
     const zones = new PositionZones(() => planRef.current, light);
@@ -185,7 +211,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
       setMeasurePoints([]);
       setSpan(null);
     };
-  }, [data, light]);
+  }, [data, light, plotStyleKey]);
   // 크로스헤어가 가리키는 봉에서 화면에 보이는 마지막 봉까지 가격이 얼마나 움직였는지 — "여기서 들어갔으면 지금은?" 감을 잡는 용도.
   const toLast = hover && lastBar && hover.bar.time !== lastBar.time && hover.bar.close ? (lastBar.close / hover.bar.close - 1) * 100 : null;
   const barPct = hover && hover.prevClose ? (hover.bar.close / hover.prevClose - 1) * 100 : null;
