@@ -20,6 +20,12 @@ BASE_URL = {"real": "https://openapi.koreainvestment.com:9443", "paper": "https:
 ORDER_TR = {("real", "buy"): "TTTC0012U", ("real", "sell"): "TTTC0011U", ("paper", "buy"): "VTTC0012U", ("paper", "sell"): "VTTC0011U"}
 CCLD_TR = {"real": "TTTC0081R", "paper": "VTTC0081R"}
 BALANCE_TR = {"real": "TTTC8434R", "paper": "VTTC8434R"}
+REVISE_TR = {"real": "TTTC0013U", "paper": "VTTC0013U"}
+PSBL_RVSECNCL_TR = "TTTC0084R"  # 주식정정취소가능주문조회 — 모의투자는 제공되지 않는다.
+PRICE_TR = "FHKST01010100"
+# 실시간 시세 웹소켓. 포트는 실전 21000 / 모의 31000이며 MSCR_KIS_WS_URL로 덮어쓸 수 있다.
+WS_URL = {"real": "ws://ops.koreainvestment.com:21000", "paper": "ws://ops.koreainvestment.com:31000"}
+WS_PATH = "/tryitout"
 ORDER_DVSN = {"limit": "00", "market": "01"}
 ACCOUNT_PATTERN = re.compile(r"^(\d{8})(?:-?(\d{2}))?$")
 CREDENTIAL_NAME = "kis_credentials"
@@ -53,6 +59,8 @@ class OrderResult:
     status: str
     message: str
     payload: dict[str, Any] = field(default_factory=dict)
+    org_no: str | None = None      # KRX_FWDG_ORD_ORGNO — 정정·취소에 원주문번호와 함께 필요하다.
+    order_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +71,8 @@ class Fill:
     tax: float
     status: str
     payload: dict[str, Any] = field(default_factory=dict)
+    remaining: float = 0.0
+    org_no: str | None = None
 
 
 def _number(value: Any) -> float:
@@ -90,6 +100,7 @@ class KISBroker:
         self.cano, self.prod = matched.group(1), matched.group(2) or "01"
         self.base_url = BASE_URL[self.env]
         self.token_path = MSCR_HOME / f"kis_token_{self.env}.json"
+        self.approval_path = MSCR_HOME / f"kis_approval_{self.env}.json"
         self.session = requests.Session()
 
     @property
@@ -163,7 +174,8 @@ class KISBroker:
         if str(payload.get("rt_cd")) != "0":
             return OrderResult(None, "rejected", message or f"주문 거부 (msg_cd={payload.get('msg_cd')})", payload)
         output = payload.get("output") or {}
-        return OrderResult(str(output.get("ODNO") or "") or None, "submitted", message or "주문 접수", payload)
+        return OrderResult(str(output.get("ODNO") or "") or None, "submitted", message or "주문 접수", payload,
+                           org_no=str(output.get("KRX_FWDG_ORD_ORGNO") or "") or None, order_time=str(output.get("ORD_TMD") or "") or None)
 
     def order_fill(self, broker_order_id: str, order_date: str | None = None) -> Fill:
         day = (order_date or datetime.now().strftime("%Y-%m-%d")).replace("-", "")
@@ -192,7 +204,94 @@ class KISBroker:
             status = "partial"
         else:
             status = "submitted"
-        return Fill(filled, price, 0.0, 0.0, status, payload)
+        return Fill(filled, price, 0.0, 0.0, status, payload, remaining=remaining, org_no=str(row.get("ord_gno_brno") or "") or None)
+
+    def revise_order(self, org_no: str, broker_order_id: str, quantity: float, order_type: str, limit_price: float | None, all_quantity: bool = True) -> OrderResult:
+        """미체결 주문을 정정한다. 주문구분을 시장가로 바꾸면 남은 잔량이 즉시 체결된다."""
+        return self._amend(org_no, broker_order_id, "01", quantity, order_type, limit_price, all_quantity)
+
+    def cancel_order(self, org_no: str, broker_order_id: str, quantity: float = 0.0, all_quantity: bool = True) -> OrderResult:
+        """미체결 잔량을 취소한다. 이미 체결된 수량은 취소되지 않는다."""
+        return self._amend(org_no, broker_order_id, "02", quantity, "market", None, all_quantity)
+
+    def _amend(self, org_no: str, broker_order_id: str, kind: str, quantity: float, order_type: str, limit_price: float | None, all_quantity: bool) -> OrderResult:
+        if not org_no or not broker_order_id:
+            raise KISError("정정·취소에는 원주문번호와 주문조직번호가 모두 필요합니다")
+        if order_type not in ORDER_DVSN:
+            raise KISError("order_type은 limit 또는 market 이어야 합니다")
+        body = {
+            "CANO": self.cano, "ACNT_PRDT_CD": self.prod, "KRX_FWDG_ORD_ORGNO": org_no, "ORGN_ODNO": broker_order_id,
+            "ORD_DVSN": ORDER_DVSN[order_type], "RVSE_CNCL_DVSN_CD": kind,
+            "ORD_QTY": str(max(0, round(quantity))), "ORD_UNPR": str(int(limit_price)) if order_type == "limit" and limit_price else "0",
+            "QTY_ALL_ORD_YN": "Y" if all_quantity else "N", "EXCG_ID_DVSN_CD": "KRX", "CNDT_PRIC": "",
+        }
+        payload = self._call("POST", "/uapi/domestic-stock/v1/trading/order-rvsecncl", REVISE_TR[self.env], body=body)
+        message = str(payload.get("msg1", "")).strip()
+        if str(payload.get("rt_cd")) != "0":
+            return OrderResult(None, "rejected", message or f"정정·취소 거부 (msg_cd={payload.get('msg_cd')})", payload)
+        output = payload.get("output") or {}
+        return OrderResult(str(output.get("ODNO") or "") or None, "submitted", message or ("취소 접수" if kind == "02" else "정정 접수"), payload,
+                           org_no=str(output.get("KRX_FWDG_ORD_ORGNO") or "") or org_no, order_time=str(output.get("ORD_TMD") or "") or None)
+
+    def current_price(self, ticker: str) -> dict[str, Any]:
+        """현재가·당일 고저. 웹소켓이 끊겼을 때의 폴백이자 데몬 재시작 직후의 복구 판정에 쓴다."""
+        payload = self._call("GET", "/uapi/domestic-stock/v1/quotations/inquire-price", PRICE_TR,
+                             params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker})
+        if str(payload.get("rt_cd")) != "0":
+            raise KISError(f"현재가 조회 실패 [{ticker}]: {payload.get('msg1')}")
+        output = payload.get("output") or {}
+        price = _number(output.get("stck_prpr"))
+        if price <= 0:
+            raise KISError(f"현재가가 비어 있습니다 [{ticker}]")
+        return {
+            "ticker": ticker, "price": price, "open": _number(output.get("stck_oprc")) or price,
+            "high": _number(output.get("stck_hgpr")) or price, "low": _number(output.get("stck_lwpr")) or price,
+            "volume": _number(output.get("acml_vol")), "halted": str(output.get("temp_stop_yn", "")).upper() == "Y",
+        }
+
+    def open_orders(self) -> list[dict[str, Any]]:
+        """정정·취소가 가능한(= 미체결 잔량이 있는) 주문. 모의투자는 이 API를 제공하지 않아 빈 목록을 돌려준다."""
+        if self.env != "real":
+            return []
+        params = {"CANO": self.cano, "ACNT_PRDT_CD": self.prod, "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"}
+        payload = self._call("GET", "/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl", PSBL_RVSECNCL_TR, params=params)
+        if str(payload.get("rt_cd")) != "0":
+            raise KISError(f"정정취소가능주문 조회 실패: {payload.get('msg1')}")
+        return [{"broker_order_id": str(row.get("odno") or "").lstrip("0"), "org_no": str(row.get("ord_gno_brno") or ""),
+                 "ticker": str(row.get("pdno") or ""), "quantity": _number(row.get("ord_qty")),
+                 "remaining": _number(row.get("psbl_qty")), "price": _number(row.get("ord_unpr"))}
+                for row in (payload.get("output") or [])]
+
+    def approval_key(self) -> str:
+        """실시간 시세 웹소켓 접속키. 액세스 토큰과 발급 경로가 다르고(secretkey 필드) 하루 단위로 재발급한다."""
+        cached = self._cached_approval()
+        if cached:
+            return cached
+        response = self.session.post(f"{self.base_url}/oauth2/Approval", json={"grant_type": "client_credentials", "appkey": self.app_key, "secretkey": self.app_secret}, timeout=20)
+        if response.status_code != 200:
+            raise KISError(f"KIS 접속키 발급 실패: {response.status_code} {response.text[:200]}")
+        key = (response.json() or {}).get("approval_key")
+        if not key:
+            raise KISError("KIS 접속키 응답에 approval_key가 없습니다")
+        MSCR_HOME.mkdir(parents=True, exist_ok=True)
+        self.approval_path.write_text(json.dumps({"key": key, "issued": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False))
+        os.chmod(self.approval_path, 0o600)
+        return str(key)
+
+    def _cached_approval(self) -> str | None:
+        try:
+            cached = json.loads(self.approval_path.read_text())
+        except (OSError, ValueError):
+            return None
+        try:
+            issued = datetime.fromisoformat(str(cached.get("issued", "")))
+        except ValueError:
+            return None
+        return str(cached["key"]) if cached.get("key") and datetime.now() - issued < timedelta(hours=20) else None
+
+    @property
+    def ws_url(self) -> str:
+        return f"{os.environ.get('MSCR_KIS_WS_URL') or WS_URL[self.env]}{WS_PATH}"
 
     def balance(self) -> dict[str, Any]:
         params = {

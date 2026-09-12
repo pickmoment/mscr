@@ -76,14 +76,15 @@ def test_settings_response_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "DB_PATH", tmp_path / "mscr.db")
     monkeypatch.setattr(routes, "db_session", lambda *args, **kwargs: __import__("mscr.db", fromlist=["db_session"]).db_session(tmp_path / "mscr.db"))
     payload = routes._settings()
-    assert set(payload) == {"mscr_home", "db_path", "schema_version", "expected_schema_version", "request_delay_sec", "request_delay_source", "krx", "credential_paths", "kis", "ingest_defaults", "data"}
-    assert set(payload["credential_paths"]) == {"krx", "kis"}
+    assert set(payload) == {"mscr_home", "db_path", "schema_version", "expected_schema_version", "market", "default_market", "request_delay_sec", "request_delay_source", "krx", "massive", "credential_paths", "kis", "ingest_defaults", "data"}
+    assert set(payload["credential_paths"]) == {"krx", "kis", "massive"}
     assert set(payload["krx"]) == {"mode", "source", "openapi_key_masked", "krx_id_masked", "stored"}
     assert set(payload["kis"]) == {"enabled", "env", "account_masked", "source", "reason", "active_env", "accounts"}
-    assert set(payload["ingest_defaults"]) == {"days", "force", "source"}
+    assert set(payload["ingest_defaults"]) == {"days", "force", "source", "sources"}
     assert set(payload["data"]) == {"as_of", "bars_rows", "instrument_count", "last_ingest_at"}
     assert payload["kis"]["enabled"] is False and payload["krx"]["mode"] in {"openapi", "idpw", "anonymous"}
-    assert payload["ingest_defaults"] == {"days": 400, "force": False, "source": "krx"}
+    assert payload["ingest_defaults"] == {"days": 400, "force": False, "source": "krx", "sources": ["krx", "fdr", "alphasquare"]}
+    assert payload["market"]["key"] == "kr" and payload["market"]["currency"] == "KRW"
 
 
 def test_ingest_defaults_persist_across_settings_reads(isolated_store):
@@ -92,7 +93,7 @@ def test_ingest_defaults_persist_across_settings_reads(isolated_store):
     save("settings", {"ingest_days": 7, "ingest_force": True, "ingest_source": "alphasquare"})
     from mscr.api import routes
 
-    assert routes._ingest_defaults() == {"days": 7, "force": True, "source": "alphasquare"}
+    assert routes._ingest_defaults() == {"days": 7, "force": True, "source": "alphasquare", "sources": ["krx", "fdr", "alphasquare"]}
 
 
 def test_ingest_defaults_reject_unknown_stored_source(isolated_store):

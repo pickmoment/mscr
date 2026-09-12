@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, IndicatorDefinition, ScreenRow, ScreenSpec } from '../lib/api';
 import FormulaInput from './FormulaInput';
 import { screenSuggestions } from '../lib/suggest';
+import { marketInfo } from '../lib/market';
 
+// 거래소 필터를 비워 두면 그 시장의 전 종목이 대상이다. 시장마다 거래소 이름이 달라 기본값도 비워 둔다.
 const defaults: ScreenSpec = {
-  universe: { kinds: ['stock', 'etf'], markets: ['KOSPI', 'KOSDAQ'], exclude_preferred: true, exclude_spac: true, exclude_halted: true, min_bars: 20 },
+  universe: { kinds: ['stock', 'etf'], markets: [], exclude_preferred: true, exclude_spac: true, exclude_halted: true, min_bars: 20 },
   formula: 'prior_avg_ratio(volume, 20) >= 3',
   sort: { formula: 'prior_avg_ratio(volume, 20)', dir: 'desc' },
   limit: 500,
@@ -123,7 +125,7 @@ export default function ScreenerPanel({ onResults, onPresetChange, onSortFormula
       {presetStatus && <div className="msg">{presetStatus}</div>}
     </div>
     <div className="section-title">유니버스</div>
-    <div className="toolbar">{['stock','etf'].map(value => <label className="check" key={value}><input type="checkbox" checked={spec.universe.kinds.includes(value)} onChange={() => updateUniverse('kinds', value)} />{value === 'stock' ? '주식' : 'ETF'}</label>)}{['KOSPI','KOSDAQ'].map(value => <label className="check" key={value}><input type="checkbox" checked={spec.universe.markets.includes(value)} onChange={() => updateUniverse('markets', value)} />{value}</label>)}</div>
+    <div className="toolbar">{['stock','etf'].map(value => <label className="check" key={value}><input type="checkbox" checked={spec.universe.kinds.includes(value)} onChange={() => updateUniverse('kinds', value)} />{value === 'stock' ? '주식' : 'ETF'}</label>)}{marketInfo().exchanges.map(value => <label className="check" key={value}><input type="checkbox" checked={spec.universe.markets.includes(value)} onChange={() => updateUniverse('markets', value)} />{value}</label>)}</div>
     <div className="toolbar"><label className="check"><input type="checkbox" checked={spec.universe.exclude_preferred} onChange={event => setSpec(current => ({ ...current, universe: { ...current.universe, exclude_preferred: event.target.checked } }))} />우선주 제외</label><label className="check"><input type="checkbox" checked={spec.universe.exclude_spac} onChange={event => setSpec(current => ({ ...current, universe: { ...current.universe, exclude_spac: event.target.checked } }))} />스팩 제외</label><label className="check"><input type="checkbox" checked={spec.universe.exclude_halted} onChange={event => setSpec(current => ({ ...current, universe: { ...current.universe, exclude_halted: event.target.checked } }))} />정지 제외</label></div>
     <div className="toolbar">
       <label className="check">최소 유효 봉 <input className="w-sm" type="number" value={spec.universe.min_bars} onChange={event => setSpec(current => ({ ...current, universe: { ...current.universe, min_bars: Number(event.target.value) } }))} /></label>

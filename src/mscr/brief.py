@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import risk, signals, trading, watchlist
+from . import market, risk, signals, trading, watchlist
 from .db import db_session
+from .market import bar_source
 from .portfolio import snapshot
 
 NEAR_PCT = 3.0
@@ -22,10 +23,16 @@ TRACKED_SCREENS_KEY = "brief_screen_ids"
 PHASE_LABELS = {"waiting_entry": "진입대기", "holding": "보유중", "tp1_done": "1차익절", "trailing": "트레일링", "closed": "청산"}
 
 
+def _tracked_key() -> str:
+    """추적 프리셋 설정은 시장 모드별로 따로 저장한다."""
+    mkt = market.active()
+    return TRACKED_SCREENS_KEY if mkt.region == market.KR.region else f"{TRACKED_SCREENS_KEY}_{mkt.key}"
+
+
 def tracked_screen_ids(path=None) -> list[int] | None:
     """브리핑이 추적할 프리셋 id 목록. 설정한 적이 없으면 `None`(전체 프리셋 추적)."""
     with db_session(path) as db:
-        row = db.execute("SELECT value FROM settings WHERE key=?", (TRACKED_SCREENS_KEY,)).fetchone()
+        row = db.execute("SELECT value FROM settings WHERE key=?", (_tracked_key(),)).fetchone()
     if row is None: return None
     try:
         return [int(value) for value in json.loads(row["value"])]
@@ -37,10 +44,10 @@ def set_tracked_screen_ids(ids: list[int] | None, path=None) -> None:
     """`None`은 필터를 지우고 전체 프리셋을 다시 추적한다. 빈 리스트는 '아무 프리셋도 추적하지 않음'으로 그대로 저장된다."""
     with db_session(path) as db:
         if ids is None:
-            db.execute("DELETE FROM settings WHERE key=?", (TRACKED_SCREENS_KEY,))
+            db.execute("DELETE FROM settings WHERE key=?", (_tracked_key(),))
         else:
             db.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                       (TRACKED_SCREENS_KEY, json.dumps(sorted({int(value) for value in ids}))))
+                       (_tracked_key(), json.dumps(sorted({int(value) for value in ids}))))
 
 
 def _recent_bars(db, tickers: list[str], bound: str) -> dict[str, list[dict[str, Any]]]:
@@ -49,7 +56,7 @@ def _recent_bars(db, tickers: list[str], bound: str) -> dict[str, list[dict[str,
     holes = ",".join("?" * len(tickers))
     rows = db.execute(
         "SELECT ticker,date,close FROM (SELECT ticker,date,close,ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) rn "
-        f"FROM daily_bars WHERE source='krx_snapshot' AND date<=? AND ticker IN ({holes})) WHERE rn<=2 ORDER BY ticker,date DESC",
+        f"FROM daily_bars WHERE source='{bar_source()}' AND date<=? AND ticker IN ({holes})) WHERE rn<=2 ORDER BY ticker,date DESC",
         (bound, *tickers)).fetchall()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -82,8 +89,8 @@ def _screen_logs(as_of: str | None, path, screen_ids: list[int] | None = None) -
     with db_session(path) as db:
         runs = db.execute(
             "SELECT r.screen_id, s.name, r.date, r.matched FROM screen_runs r JOIN screens s ON s.id=r.screen_id "
-            f"WHERE r.date=(SELECT MAX(d.date) FROM screen_runs d WHERE d.screen_id=r.screen_id AND d.date<=?){clause} ORDER BY s.name",
-            params).fetchall()
+            f"WHERE s.region=? AND r.date=(SELECT MAX(d.date) FROM screen_runs d WHERE d.screen_id=r.screen_id AND d.date<=?){clause} ORDER BY s.name",
+            [market.region(), *params]).fetchall()
     logs = []
     for run in runs:
         logs.append({
@@ -162,7 +169,7 @@ def build(date: str | None = None, path=None) -> dict[str, Any]:
 
     tracked = tracked_screen_ids(path)
     logs = _screen_logs(as_of, path, tracked)
-    plans = _plan_rows(path)
+    plans = _plan_rows(path) if market.active().trading else []
     tickers = {row["ticker"] for log in logs for key in ("entered", "held", "exited") for row in log["diff"][key]}
     plan_tickers = sorted({row["ticker"] for row in plans})
     with db_session(path) as db:

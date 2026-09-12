@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { alignTick, legQuantities, levelLabel, PositionLevel, PositionOrigin, PositionPlan, positionMetrics, positionOutcome, PositionSplit, tickSize } from '../lib/position';
 import { api } from '../lib/api';
-import { won } from '../lib/format';
+import { money } from '../lib/format';
 
 type Props = { plan: PositionPlan; ticker: string; name: string; kind: string; onChange: (plan: PositionPlan) => void; onReset: () => void; onClose: () => void };
 type PlanForm = { id: number | null; name: string; orderType: 'limit' | 'market'; tp1Ratio: string; tp2Ratio: string; trailing: string; baseTarget2: number | null; setup: string; setupDate: string | null };
@@ -10,7 +10,7 @@ type PriceLevel = 'entry' | 'stop' | 'target';
 const editableLevels: PriceLevel[] = ['entry', 'stop', 'target'];
 const rate = (value: number | null) => value == null ? '—' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`;
 const number = (text: string) => { const value = Number(text); return Number.isFinite(value) ? value : 0; };
-const signedWon = (value: number) => `${value >= 0 ? '+' : '-'}${won(Math.abs(value))}`;
+const signedWon = (value: number) => `${value >= 0 ? '+' : '-'}${money(Math.abs(value))}`;
 // 신호 로그에서 가져온 셋업 태그는 오래된 것까지 끌어오면 의미가 없다. 최근 10거래일 안의 신호만 쓴다.
 const SETUP_LOOKBACK_DAYS = 10;
 const businessDaysBetween = (from: string, to: string) => {
@@ -118,10 +118,10 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
     <label className="planner-field"><span>수량</span><input type="number" min="0" step="1" value={plan.quantity || ''} aria-label="수량" onChange={event => onChange({ ...plan, quantity: Math.max(0, Math.floor(number(event.target.value))) })} /></label>
     <div className="planner-readout">
       <span title="청산까지의 폭 ÷ 손절까지의 폭. 전량을 그 가격에 청산했을 때의 배수이며 분할 비중은 빠져 있습니다."><i className="subtle">손익비</i> <b className={metrics.rr !== null && metrics.rr >= 1 ? 'up' : 'down'}>{metrics.rr === null ? '—' : `${metrics.rr.toFixed(2)}R`}</b></span>
-      <span className="level-stop"><i>손절 {rate(metrics.stopPct)}</i>{plan.quantity > 0 && <b>-{won(metrics.loss)}</b>}</span>
-      <span className="level-target" title="전량을 1차 청산가에 넘겼을 때의 손익입니다. 분할하면 아래 '계획 합계'의 1차 몫만 실현됩니다."><i>청산 {rate(metrics.targetPct)}</i>{plan.quantity > 0 && <b>+{won(metrics.gain)}</b>}</span>
+      <span className="level-stop"><i>손절 {rate(metrics.stopPct)}</i>{plan.quantity > 0 && <b>-{money(metrics.loss)}</b>}</span>
+      <span className="level-target" title="전량을 1차 청산가에 넘겼을 때의 손익입니다. 분할하면 아래 '계획 합계'의 1차 몫만 실현됩니다."><i>청산 {rate(metrics.targetPct)}</i>{plan.quantity > 0 && <b>+{money(metrics.gain)}</b>}</span>
       {plan.target2 !== null && <span className="level-target2" title="전량을 2차 청산가에 넘겼을 때의 배수입니다."><i>2차 청산 {rate(metrics.target2Pct)}</i><b>{metrics.rr2 === null ? '—' : `${metrics.rr2.toFixed(2)}R`}</b></span>}
-      {plan.quantity > 0 && <span className="subtle"><i>투자금</i> <b>{won(metrics.cost)}</b></span>}
+      {plan.quantity > 0 && <span className="subtle"><i>투자금</i> <b>{money(metrics.cost)}</b></span>}
       {metrics.warning && <span className="planner-warning">{metrics.warning}</span>}
     </div>
     {outcome && <div className="planner-readout plan-legs">
@@ -131,8 +131,8 @@ export default function PositionPlanner({ plan, ticker, name, kind, onChange, on
       </span>
       {outcome.legs.map(leg => <span key={leg.key} className={leg.key === 'tp1' ? 'level-target' : leg.key === 'tp2' ? 'level-target2' : 'subtle'}
         title={leg.floor
-          ? `트레일링 청산가는 사후에 정해집니다. 2차 청산가에서 곧바로 ${split?.trailing ?? 0}% 되돌리는 최악의 경우인 ${won(leg.price)}를 하한으로 씁니다.`
-          : `${won(leg.price)}에 ${leg.quantity}주를 청산합니다.`}>
+          ? `트레일링 청산가는 사후에 정해집니다. 2차 청산가에서 곧바로 ${split?.trailing ?? 0}% 되돌리는 최악의 경우인 ${money(leg.price)}를 하한으로 씁니다.`
+          : `${money(leg.price)}에 ${leg.quantity}주를 청산합니다.`}>
         <i>{leg.label} {plan.quantity > 0 ? `${leg.quantity}주` : `${Math.round(leg.weight * 100)}%`}{leg.floor ? ' ≥' : ''}</i>
         <b>{leg.r === null ? '—' : `${leg.r.toFixed(2)}R`}{plan.quantity > 0 ? ` · ${signedWon(leg.amount)}` : ''}</b>
       </span>)}

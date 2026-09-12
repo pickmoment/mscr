@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 
 from .db import db_session
+from .market import active as active_market
+from .market import bar_source
 from .indicators import atr, crosses, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, returns, rsi, slope, sma
 
 SERIES_NAMES = {"open", "high", "low", "close", "volume", "value"}
@@ -282,8 +284,8 @@ def calculate_group(frame: pd.DataFrame, expression: str | None = None, sort_exp
 
 def ticker_snapshot(ticker: str, path=None, as_of_offset: int = 0) -> dict[str, Any]:
     with db_session(path) as db:
-        rows = db.execute("SELECT date,open,high,low,close,volume,value,halted FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date", (ticker,)).fetchall()
-        days = [row[0] for row in db.execute("SELECT DISTINCT date FROM daily_bars WHERE source='krx_snapshot' ORDER BY date").fetchall()] if as_of_offset else []
+        rows = db.execute(f"SELECT date,open,high,low,close,volume,value,halted FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date", (ticker,)).fetchall()
+        days = [row[0] for row in db.execute(f"SELECT DISTINCT date FROM daily_bars WHERE source='{bar_source()}' ORDER BY date").fetchall()] if as_of_offset else []
     if not rows:
         return {}
     frame = pd.DataFrame([dict(row) for row in rows])
@@ -297,7 +299,8 @@ def screen_context(spec: dict[str, Any], path=None) -> dict[str, Any]:
     universe = spec.get("universe", {})
     kinds = universe.get("kinds") or ["stock", "etf"]
     markets = universe.get("markets") or []
-    if any(kind not in {"stock", "etf"} for kind in kinds) or any(market not in {"KOSPI", "KOSDAQ", "KONEX"} for market in markets):
+    exchanges = set(active_market().exchanges)
+    if any(kind not in {"stock", "etf"} for kind in kinds) or any(exchange not in exchanges for exchange in markets):
         raise ValueError("invalid universe")
     formula = str(spec.get("formula", "")).strip()
     sort_expression = str((spec.get("sort") or {}).get("formula", "close")).strip()
@@ -309,8 +312,9 @@ def screen_context(spec: dict[str, Any], path=None) -> dict[str, Any]:
     function_names = BUILTIN_FUNCTIONS | {item["key"] for item in custom}
     validate_formula(formula, SCREEN_NAMES, function_names)
     validate_formula(sort_expression, SCREEN_NAMES, function_names)
-    clauses = [f"kind IN ({','.join('?' for _ in kinds)})"]
-    params: list[Any] = list(kinds)
+    # 유니버스는 현재 시장 모드로 닫아 둔다. 한국·미국 종목을 한 화면에 섞지 않는다.
+    clauses = ["region=?", f"kind IN ({','.join('?' for _ in kinds)})"]
+    params: list[Any] = [active_market().region, *kinds]
     if markets:
         clauses.append(f"market IN ({','.join('?' for _ in markets)})")
         params.extend(markets)
@@ -321,9 +325,9 @@ def screen_context(spec: dict[str, Any], path=None) -> dict[str, Any]:
     with db_session(path) as db:
         instruments = [dict(row) for row in db.execute(f"SELECT * FROM instruments WHERE {' AND '.join(clauses)}", params).fetchall()]
         tickers = {row["ticker"] for row in instruments}
-        bars = [dict(row) for row in db.execute("SELECT ticker,date,open,high,low,close,volume,value,halted FROM daily_bars WHERE source='krx_snapshot' ORDER BY ticker,date").fetchall() if row["ticker"] in tickers]
+        bars = [dict(row) for row in db.execute(f"SELECT ticker,date,open,high,low,close,volume,value,halted FROM daily_bars WHERE source='{bar_source()}' ORDER BY ticker,date").fetchall() if row["ticker"] in tickers]
         fundamentals = {row["ticker"]: dict(row) for row in db.execute("SELECT f.* FROM snapshots_fundamental f JOIN (SELECT ticker,MAX(date) date FROM snapshots_fundamental GROUP BY ticker) x ON x.ticker=f.ticker AND x.date=f.date").fetchall()}
-        days = [row[0] for row in db.execute("SELECT DISTINCT date FROM daily_bars WHERE source='krx_snapshot' ORDER BY date").fetchall()]
+        days = [row[0] for row in db.execute(f"SELECT DISTINCT date FROM daily_bars WHERE source='{bar_source()}' ORDER BY date").fetchall()]
     return {
         "instruments": instruments, "days": days,
         "by_ticker": {ticker: group for ticker, group in pd.DataFrame(bars).groupby("ticker")} if bars else {},

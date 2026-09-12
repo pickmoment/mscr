@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, MarketBreadth, MarketRankRow, MarketStats } from '../lib/api';
-import { compactVolume, ratio, won } from '../lib/format';
+import { compactMoney, compactVolume, ratio, money } from '../lib/format';
 import { SelectTicker } from '../lib/nav';
 import ViewHeader from './ViewHeader';
 
@@ -33,7 +33,7 @@ function RankTable({ title, rows, onSelect, valueLabel, valueOf }: { title: stri
         <tbody>
           {rows.map(row => <tr key={row.ticker} onClick={() => onSelect(row.ticker, tickers)}>
             <td>{row.name}<span className="subtle mono"> {row.ticker}</span></td>
-            <td className="num">{won(row.close)}</td>
+            <td className="num">{money(row.close)}</td>
             <td className={`num ${changeClass(row.change_pct)}`}>{fmtPct2(row.change_pct)}</td>
             <td className="num">{valueOf(row)}</td>
           </tr>)}
@@ -67,6 +67,9 @@ export default function MarketStatsPanel({ onSelect }: { onSelect: SelectTicker 
       .finally(() => setLoading(false));
   }, [date]);
 
+  // 그 거래일에 종목이 실제로 있는 거래소만 그린다(미국의 '기타' 분류처럼 빈 칸을 만들지 않는다).
+  const listedExchanges = stats ? stats.exchanges.filter(name => (stats.counts.by_market[name] || 0) > 0) : [];
+
   return <div className="page">
     <ViewHeader
       title="시장 통계"
@@ -82,39 +85,37 @@ export default function MarketStatsPanel({ onSelect }: { onSelect: SelectTicker 
     {stats && <>
       <div className="toolbar">
         <span className="badge">기준일 {stats.date}</span>
-        <span className="subtle">전체 {fmtCount(stats.counts.total)} · 코스피 {fmtCount(stats.counts.kospi)} · 코스닥 {fmtCount(stats.counts.kosdaq)} · 주식 {fmtCount(stats.counts.stock)} · ETF {fmtCount(stats.counts.etf)}</span>
+        <span className="subtle">전체 {fmtCount(stats.counts.total)}{listedExchanges.map(name => ` · ${name} ${fmtCount(stats.counts.by_market[name])}`).join('')} · 주식 {fmtCount(stats.counts.stock)} · ETF {fmtCount(stats.counts.etf)}</span>
       </div>
 
       <div className="section-title">시장 브레스</div>
       <div className="grid grid--4">
         <BreadthCard label="전체" data={stats.breadth.all} />
-        <BreadthCard label="코스피" data={stats.breadth.kospi} />
-        <BreadthCard label="코스닥" data={stats.breadth.kosdaq} />
+        {listedExchanges.map(name => <BreadthCard key={name} label={name} data={stats.breadth.by_market[name]} />)}
         <BreadthCard label="ETF" data={stats.breadth.etf} />
       </div>
 
       <div className="section-title">거래 규모</div>
       <div className="grid grid--auto">
-        <div className="stat-card"><label>거래대금 합계</label><strong>{compactVolume(stats.volume.value_sum)}원</strong>{stats.volume.value_sum_prev != null && <div className="subtle">전일 {compactVolume(stats.volume.value_sum_prev)}원</div>}</div>
+        <div className="stat-card"><label>거래대금 합계</label><strong>{compactMoney(stats.volume.value_sum)}</strong>{stats.volume.value_sum_prev != null && <div className="subtle">전일 {compactMoney(stats.volume.value_sum_prev)}</div>}</div>
         <div className="stat-card"><label>거래량 합계</label><strong>{compactVolume(stats.volume.volume_sum)}주</strong></div>
-        <div className="stat-card"><label>코스피 시가총액</label><strong>{compactVolume(stats.volume.market_cap_sum.KOSPI)}원</strong></div>
-        <div className="stat-card"><label>코스닥 시가총액</label><strong>{compactVolume(stats.volume.market_cap_sum.KOSDAQ)}원</strong></div>
+        {listedExchanges.map(name => <div className="stat-card" key={name}><label>{name} 시가총액</label><strong>{compactMoney(stats.volume.market_cap_sum[name])}</strong></div>)}
       </div>
 
       <div className="section-title">Top 랭킹 (주식)</div>
       <div className="grid grid--2">
-        <RankTable title="거래대금 상위" rows={stats.rankings.value_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactVolume(row.value)}원`} />
+        <RankTable title="거래대금 상위" rows={stats.rankings.value_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactMoney(row.value)}`} />
         <RankTable title="거래량 급증 상위" rows={stats.rankings.volume_surge_top} onSelect={onSelect} valueLabel="20일 평균 대비" valueOf={row => fmtRatioX(row.vol_ratio)} />
-        <RankTable title="등락률 상위" rows={stats.rankings.gainers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactVolume(row.value)}원`} />
-        <RankTable title="등락률 하위" rows={stats.rankings.losers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactVolume(row.value)}원`} />
+        <RankTable title="등락률 상위" rows={stats.rankings.gainers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactMoney(row.value)}`} />
+        <RankTable title="등락률 하위" rows={stats.rankings.losers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactMoney(row.value)}`} />
       </div>
 
       <div className="section-title">ETF 통계</div>
       <div className="grid grid--2">
-        <RankTable title="거래대금 상위 (ETF)" rows={stats.etf_rankings.value_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactVolume(row.value)}원`} />
+        <RankTable title="거래대금 상위 (ETF)" rows={stats.etf_rankings.value_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactMoney(row.value)}`} />
         <RankTable title="NAV 괴리율 상위 (ETF)" rows={stats.etf_rankings.premium_top} onSelect={onSelect} valueLabel="NAV 괴리율" valueOf={row => fmtPct2(row.premium_pct)} />
-        <RankTable title="등락률 상위 (ETF)" rows={stats.etf_rankings.gainers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactVolume(row.value)}원`} />
-        <RankTable title="등락률 하위 (ETF)" rows={stats.etf_rankings.losers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactVolume(row.value)}원`} />
+        <RankTable title="등락률 상위 (ETF)" rows={stats.etf_rankings.gainers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactMoney(row.value)}`} />
+        <RankTable title="등락률 하위 (ETF)" rows={stats.etf_rankings.losers_top} onSelect={onSelect} valueLabel="거래대금" valueOf={row => `${compactMoney(row.value)}`} />
       </div>
 
       <div className="section-title">시가총액 구간별 통계 (주식)</div>
@@ -126,7 +127,7 @@ export default function MarketStatsPanel({ onSelect }: { onSelect: SelectTicker 
               <td>{band.category}</td>
               <td className="num">{fmtCount(band.count)}</td>
               <td className={`num ${changeClass(band.avg_change_pct)}`}>{fmtPct2(band.avg_change_pct)}</td>
-              <td className="num">{compactVolume(band.value_sum)}원</td>
+              <td className="num">{compactMoney(band.value_sum)}</td>
             </tr>)}
             {!stats.sectors.length && <tr><td colSpan={4} className="subtle">해당 날짜의 시가총액 데이터가 없습니다</td></tr>}
           </tbody>

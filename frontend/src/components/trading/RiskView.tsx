@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, RiskLimits } from '../../lib/api';
-import { won } from '../../lib/format';
+import { money } from '../../lib/format';
 import ViewHeader from '../ViewHeader';
 import Term from '../Term';
 import { useTrading } from './TradingContext';
@@ -35,16 +35,16 @@ export default function RiskView() {
           <span className="subtle">기준일 {heat.as_of || '—'} · 보유분만 보면 {pctPoint(heat.open_heat_pct)} · 계획 {heat.plans.length}건</span>
         </div>
         <div className="grid grid--auto">
-          <div className="stat-card"><label>진행 위험</label><strong>{won(heat.open_risk_krw)}</strong><span className="subtle">체결된 포지션이 손절까지 잃을 금액</span></div>
-          <div className="stat-card"><label>대기 위험</label><strong>{won(heat.pending_risk_krw)}</strong><span className="subtle">아직 진입하지 않은 계획의 최초 위험</span></div>
-          <div className="stat-card"><label>총자산</label><strong>{won(heat.equity)}</strong><span className="subtle">현금 {won(heat.cash_krw)} · 평가 {won(heat.market_value)}</span></div>
-          <div className="stat-card"><label>남은 여유</label><strong className={heat.budget.remaining_krw > 0 ? undefined : 'down'}>{won(heat.budget.remaining_krw)}</strong><span className="subtle">한도 {won(heat.budget.heat_limit_krw)} · 총 위험 {won(heat.total_risk_krw)}</span></div>
+          <div className="stat-card"><label>진행 위험</label><strong>{money(heat.open_risk_krw)}</strong><span className="subtle">체결된 포지션이 손절까지 잃을 금액</span></div>
+          <div className="stat-card"><label>대기 위험</label><strong>{money(heat.pending_risk_krw)}</strong><span className="subtle">아직 진입하지 않은 계획의 최초 위험</span></div>
+          <div className="stat-card"><label>총자산</label><strong>{money(heat.equity)}</strong><span className="subtle">현금 {money(heat.cash_krw)} · 평가 {money(heat.market_value)}</span></div>
+          <div className="stat-card"><label>남은 여유</label><strong className={heat.budget.remaining_krw > 0 ? undefined : 'down'}>{money(heat.budget.remaining_krw)}</strong><span className="subtle">한도 {money(heat.budget.heat_limit_krw)} · 총 위험 {money(heat.total_risk_krw)}</span></div>
         </div>
         <form className="autoplan-form" onSubmit={saveLimits}>
           <label><Term id="risk_per_trade">1회 위험</Term>(%)<input required type="number" min="0" step="any" value={draft.risk} onChange={event => setDraft(current => ({ ...current, risk: event.target.value }))} title="계획 한 건에 허용하는 손실을 총자산 대비 비율로 정합니다. 계획 자동 생성의 최대 손실 금액 기본값이 됩니다." /></label>
           <label>히트 한도(%)<input required type="number" min="0" step="any" value={draft.heat} onChange={event => setDraft(current => ({ ...current, heat: event.target.value }))} title="모든 계획의 손실 합계가 넘지 말아야 할 총자산 대비 비율입니다." /></label>
           <button className="btn btn--primary" disabled={busy}>한도 저장</button>
-          <span className="subtle">1회 위험 {won(heat.budget.per_trade_krw)}{heat.budget.suggested_max_loss == null ? '' : ` · 다음 계획 권장 손실 한도 ${won(heat.budget.suggested_max_loss)}`}</span>
+          <span className="subtle">1회 위험 {money(heat.budget.per_trade_krw)}{heat.budget.suggested_max_loss == null ? '' : ` · 다음 계획 권장 손실 한도 ${money(heat.budget.suggested_max_loss)}`}</span>
         </form>
         {heat.warnings.length > 0 && <div className="msg autoplan-warnings" data-tone="warn">
           <b>확인하세요</b>
@@ -62,8 +62,8 @@ export default function RiskView() {
               <td className="mono">{row.ticker}</td>
               <td><span className="badge" data-tone={stateTone[row.state]}>{stateLabel[row.state] || row.state}</span></td>
               <td className="num">{num(row.quantity)}</td>
-              <td className="num">{won(row.risk_krw)}</td>
-              <td className="num">{won(row.initial_risk_krw)}</td>
+              <td className="num">{money(row.risk_krw)}</td>
+              <td className="num">{money(row.initial_risk_krw)}</td>
               <td className="num">{pctPoint(row.risk_pct)}</td>
             </tr>)}</tbody>
           </table>
@@ -71,7 +71,7 @@ export default function RiskView() {
         </div>
         {heat.unprotected.length > 0 && <div className="stack">
           <div className="section-title">손절 없는 보유 <span className="badge" data-tone="danger">{heat.unprotected.length}</span></div>
-          <div className="chip-row">{heat.unprotected.map(item => <span className="badge" data-tone="danger" key={item.ticker}>{item.name}({item.ticker}) · {num(item.quantity)}주 · {won(item.market_value)} · 비중 {pct(item.weight)}</span>)}</div>
+          <div className="chip-row">{heat.unprotected.map(item => <span className="badge" data-tone="danger" key={item.ticker}>{item.name}({item.ticker}) · {num(item.quantity)}주 · {money(item.market_value)} · 비중 {pct(item.weight)}</span>)}</div>
           <div className="subtle">손절가를 가진 계획이 없는 보유입니다. 최대 손실이 정해져 있지 않아 위의 히트에 잡히지 않습니다. 계획을 만들어 손절을 걸어야 이 표에서 빠집니다.</div>
         </div>}
       </div>}

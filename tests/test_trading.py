@@ -230,7 +230,7 @@ def test_exit_leg_skipped_when_live_holdings_not_yet_confirmed(store):
         insert_bar(db, "005930", "2026-06-02", 1090, 1110, 1080, 1105)  # breaks tp1 @1100
     orders = run_plans(broker=broker, dry_run=False, path=store)
     assert orders[0]["status"] == "skipped"
-    assert "보유 수량 부족" in orders[0]["message"]
+    assert "보유 수량 없음" in orders[0]["message"]
 
 
 def test_stale_bars_block_orders(store):

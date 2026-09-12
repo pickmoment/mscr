@@ -9,10 +9,11 @@ import pandas as pd
 import os
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from .. import backtest, brief, ingest_job, jobs, review, risk, signals
+from .. import backtest, brief, ingest_job, jobs, market, review, risk, signals
 from ..broker.kis import CREDENTIAL_PATH as kis_credential_path
 from ..broker.kis import KISError, broker_from_config, broker_status, clear_credentials, save_credentials, set_active_env
 from ..db import db_session
+from ..market import bar_source
 from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_NAMES, custom_definitions, evaluate_formula, formula_calls, ticker_snapshot, truncate_price_jump, validate_formula
 from ..indicators import bollinger_bands, macd, rsi, sma
 from .. import market_stats
@@ -24,49 +25,91 @@ from ..credentials import path_for
 from ..credentials import save as save_settings
 from ..providers.krx import CREDENTIAL_NAME as krx_credential_name
 from ..providers.krx import KRXProvider, _stock, clear_krx_credentials, krx_status, save_krx_credentials
+from ..providers.massive import clear_massive_credentials, massive_status, save_massive_credentials, save_massive_delay
 from ..screener import FIELDS, run
-from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, run_plans, save_plan, simulate_plan, sync_orders
+from ..trading import delete_plan, evaluate_plans, list_orders, list_plans, manage_open_orders, run_plans, save_plan, simulate_plan, sync_orders
 from ..autoplan import propose as propose_plan
-from .models import ActiveEnvRequest, BacktestRequest, BriefSettingsRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, RiskLimitRequest, ScreenRequest, ScreenSaveRequest, SignalCaptureRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
+from .. import guard, live
+from .models import ActiveEnvRequest, MarketRequest, MassiveCredentialRequest, BacktestRequest, GuardRequest, KillSwitchRequest, PanicRequest, BriefSettingsRequest, BrokerCredentialRequest, CashRequest, IndicatorDefinitionRequest, IngestRunRequest, KRXCredentialRequest, PlanProposalRequest, PreferenceRequest, RiskLimitRequest, ScreenRequest, ScreenSaveRequest, SignalCaptureRequest, TradePlanRequest, TradeRequest, TradeRunRequest, WatchlistBulkRequest, WatchlistItemRequest, WatchlistItemsActionRequest, WatchlistRequest
 
 router = APIRouter(prefix="/api")
 
+
+def _require_kr_only(check) -> None:
+    """국내 전용 기능을 미국 모드에서 호출했을 때 이유가 드러나는 409로 바꾼다."""
+    try:
+        check()
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+def _market_data(db) -> dict[str, Any]:
+    """현재 시장 모드의 데이터 현황. 다른 시장의 종목·일봉은 세지 않는다."""
+    mkt = market.active()
+    kinds = ",".join("?" * len(mkt.ingest_kinds))
+    counts = {r["kind"]: r["n"] for r in db.execute("SELECT kind,COUNT(*) n FROM instruments WHERE region=? GROUP BY kind", (mkt.region,))}
+    bars = db.execute("SELECT COUNT(*) FROM daily_bars WHERE source=?", (mkt.bar_source,)).fetchone()[0]
+    latest = db.execute(f"SELECT MAX(ran_at) FROM ingest_runs WHERE status='ok' AND kind IN ({kinds})", mkt.ingest_kinds).fetchone()[0]
+    as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE source=?", (mkt.bar_source,)).fetchone()[0]
+    return {"as_of": as_of, "instrument_count": {"stock": counts.get("stock", 0), "etf": counts.get("etf", 0)}, "bars_rows": bars, "last_ingest_at": latest}
+
+
+@router.get("/markets")
+def markets():
+    """선택 가능한 시장 모드와 각 모드가 지원하는 기능 범위."""
+    return {"active": market.active().key, "default": market.stored_default(), "markets": [item.as_dict() for item in market.MARKETS.values()]}
+
+
+@router.put("/markets/default")
+def put_default_market(request: MarketRequest):
+    """새로고침·CLI에서도 이어 쓸 기본 시장 모드를 저장한다."""
+    try:
+        return {"default": market.save_default(request.market).key}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.get("/meta")
 def meta():
+    mkt = market.active()
     with db_session() as db:
-        counts = {r["kind"]: r["n"] for r in db.execute("SELECT kind,COUNT(*) n FROM instruments GROUP BY kind")}
-        bars = db.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0]
-        latest = db.execute("SELECT MAX(ran_at) FROM ingest_runs WHERE status='ok'").fetchone()[0]
-        as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE source='krx_snapshot'").fetchone()[0]
-    return {"as_of": as_of, "instrument_count": {"stock": counts.get("stock", 0), "etf": counts.get("etf", 0)}, "bars_rows": bars, "last_ingest_at": latest, "data_ready": bool(bars)}
+        data = _market_data(db)
+    return data | {"market": mkt.key, "currency": mkt.currency, "data_ready": bool(data["bars_rows"])}
+
+
+def _ingest_setting_key(name: str) -> str:
+    """수집 기본값은 시장 모드마다 따로 기억한다(국내 400일 / 미국 30일처럼 적정값이 다르다)."""
+    mkt = market.active()
+    return name if mkt.region == market.KR.region else f"{name}_{mkt.key}"
 
 
 def _ingest_defaults() -> dict[str, Any]:
+    mkt = market.active()
     stored = load_settings("settings")
-    source = stored.get("ingest_source")
+    source = stored.get(_ingest_setting_key("ingest_source"))
     return {
-        "days": int(stored.get("ingest_days") or 400),
-        "force": bool(stored.get("ingest_force") or False),
-        "source": source if source in ("krx", "fdr", "alphasquare") else "krx",
+        "days": int(stored.get(_ingest_setting_key("ingest_days")) or mkt.default_ingest_days),
+        "force": bool(stored.get(_ingest_setting_key("ingest_force")) or False),
+        "source": source if source in mkt.ingest_sources else mkt.default_ingest_source,
+        "sources": list(mkt.ingest_sources),
     }
 
 
 def _settings() -> dict[str, Any]:
+    mkt = market.active()
     with db_session() as db:
-        counts = {row["kind"]: row["n"] for row in db.execute("SELECT kind,COUNT(*) n FROM instruments GROUP BY kind")}
-        bars = db.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0]
-        as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE source='krx_snapshot'").fetchone()[0]
-        last_ingest = db.execute("SELECT MAX(ran_at) FROM ingest_runs WHERE status='ok'").fetchone()[0]
+        data = _market_data(db)
         version = db.execute("PRAGMA user_version").fetchone()[0]
     krx = krx_status()
     return {
         "mscr_home": str(MSCR_HOME), "db_path": str(DB_PATH), "schema_version": version, "expected_schema_version": SCHEMA_VERSION,
+        "market": mkt.as_dict(), "default_market": market.stored_default(),
         "request_delay_sec": request_delay(), "request_delay_source": request_delay_source(),
         "krx": {key: krx[key] for key in ("mode", "source", "openapi_key_masked", "krx_id_masked", "stored")},
-        "credential_paths": {"krx": str(path_for(krx_credential_name)), "kis": str(kis_credential_path)},
+        "massive": massive_status(),
+        "credential_paths": {"krx": str(path_for(krx_credential_name)), "kis": str(kis_credential_path), "massive": str(path_for("massive_credentials"))},
         "kis": broker_status(),
         "ingest_defaults": _ingest_defaults(),
-        "data": {"as_of": as_of, "bars_rows": bars, "instrument_count": {"stock": counts.get("stock", 0), "etf": counts.get("etf", 0)}, "last_ingest_at": last_ingest},
+        "data": data,
     }
 
 
@@ -90,14 +133,32 @@ def delete_krx_credentials():
     return _settings()
 
 
-@router.put("/settings/preferences")
-def put_preferences(request: PreferenceRequest):
-    save_settings("settings", load_settings("settings") | {"request_delay_sec": request.request_delay_sec})
+@router.put("/settings/massive")
+def put_massive_credentials(request: MassiveCredentialRequest):
+    payload = {key: value for key, value in request.model_dump().items() if value is not None}
+    if not payload:
+        raise HTTPException(422, "저장할 값이 없습니다")
+    save_massive_credentials(**payload)
     return _settings()
 
 
-@router.get("/ingest/krx-latest")
-def ingest_krx_latest():
+@router.delete("/settings/massive")
+def delete_massive_credentials():
+    clear_massive_credentials()
+    return _settings()
+
+
+@router.put("/settings/preferences")
+def put_preferences(request: PreferenceRequest):
+    save_settings("settings", load_settings("settings") | {"request_delay_sec": request.request_delay_sec})
+    if request.massive_request_delay_sec is not None:
+        save_massive_delay(request.massive_request_delay_sec)
+    return _settings()
+
+
+@router.get("/ingest/latest")
+def ingest_latest():
+    """전체 수집 없이 데이터 제공처가 발표한 최신 거래일만 확인한다."""
     from ..ingest import latest_trading_day
     try:
         return {"as_of": latest_trading_day()}
@@ -112,9 +173,17 @@ def get_ingest_status():
 
 @router.post("/ingest/run")
 def post_ingest_run(request: IngestRunRequest):
-    save_settings("settings", load_settings("settings") | {"ingest_days": request.days, "ingest_force": request.force, "ingest_source": request.source})
+    mkt = market.active()
+    source = request.source or mkt.default_ingest_source
+    if source not in mkt.ingest_sources:
+        raise HTTPException(422, f"{mkt.label} 주식 모드에서 지원하지 않는 소스입니다: {source}")
+    save_settings("settings", load_settings("settings") | {
+        _ingest_setting_key("ingest_days"): request.days,
+        _ingest_setting_key("ingest_force"): request.force,
+        _ingest_setting_key("ingest_source"): source,
+    })
     # 수집이 끝나면 새 거래일에 대한 신호 로그를 이어서 채운다(브리핑·프리셋 diff가 이 로그를 읽는다).
-    return ingest_job.start(request.days, request.force, request.source, then=lambda: signals.start_job(days=1))
+    return ingest_job.start(request.days, request.force, source, then=lambda: signals.start_job(days=1))
 
 
 @router.post("/screen")
@@ -128,7 +197,18 @@ def screen(request: ScreenRequest):
 @router.get("/screens")
 def screens():
     with db_session() as db:
-        return [dict(row) | {"spec": json.loads(row["spec"])} for row in db.execute("SELECT id,name,spec,updated_at FROM screens ORDER BY name")]
+        return [dict(row) | {"spec": json.loads(row["spec"])} for row in db.execute("SELECT id,name,spec,updated_at FROM screens WHERE region=? ORDER BY name", (market.region(),))]
+
+
+def _require_free_screen_name(db, name: str, screen_id: int | None = None) -> None:
+    """프리셋 이름은 시장을 가로질러 유일하다. 다른 시장의 프리셋을 덮어쓰지 않도록 막는다."""
+    row = db.execute("SELECT id,region FROM screens WHERE name=?", (name,)).fetchone()
+    if row is None or row["id"] == screen_id:
+        return
+    if row["region"] != market.region():
+        raise HTTPException(409, "다른 시장 모드에 같은 이름의 프리셋이 있습니다")
+    if screen_id is not None:
+        raise HTTPException(409, "같은 이름의 프리셋이 있습니다")
 
 def _validated_spec(spec: ScreenRequest) -> dict[str, Any]:
     payload = spec.model_dump()
@@ -149,7 +229,8 @@ def save_screen(request: ScreenSaveRequest):
     payload = _validated_spec(request.spec)
     now = datetime.now().isoformat(timespec="seconds")
     with db_session() as db:
-        db.execute("INSERT INTO screens(name,spec,created_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET spec=excluded.spec,updated_at=excluded.updated_at", (request.name, json.dumps(payload, ensure_ascii=False), now, now))
+        _require_free_screen_name(db, request.name)
+        db.execute("INSERT INTO screens(name,region,spec,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET spec=excluded.spec,updated_at=excluded.updated_at", (request.name, market.region(), json.dumps(payload, ensure_ascii=False), now, now))
         row = db.execute("SELECT id FROM screens WHERE name=?", (request.name,)).fetchone()
     return {"id": row[0]}
 
@@ -159,17 +240,16 @@ def update_screen(screen_id: int, request: ScreenSaveRequest):
     payload = _validated_spec(request.spec)
     now = datetime.now().isoformat(timespec="seconds")
     with db_session() as db:
-        if not db.execute("SELECT 1 FROM screens WHERE id=?", (screen_id,)).fetchone():
+        if not db.execute("SELECT 1 FROM screens WHERE id=? AND region=?", (screen_id, market.region())).fetchone():
             raise HTTPException(404, "screen not found")
-        if db.execute("SELECT 1 FROM screens WHERE name=? AND id<>?", (request.name, screen_id)).fetchone():
-            raise HTTPException(409, "같은 이름의 프리셋이 있습니다")
+        _require_free_screen_name(db, request.name, screen_id)
         db.execute("UPDATE screens SET name=?, spec=?, updated_at=? WHERE id=?", (request.name, json.dumps(payload, ensure_ascii=False), now, screen_id))
     return {"id": screen_id, "name": request.name, "updated_at": now}
 
 @router.delete("/screens/{screen_id}", status_code=204)
 def delete_screen(screen_id: int):
     with db_session() as db:
-        db.execute("DELETE FROM screens WHERE id=?", (screen_id,))
+        db.execute("DELETE FROM screens WHERE id=? AND region=?", (screen_id, market.region()))
     return Response(status_code=204)
 
 @router.get("/indicators")
@@ -246,20 +326,20 @@ def search_instruments(q: str = Query(..., min_length=1, max_length=40), limit: 
     with db_session() as db:
         rows = db.execute(
             "SELECT ticker,name,kind,market FROM instruments "
-            "WHERE delisted=0 AND (ticker LIKE ? OR name LIKE ?) "
+            "WHERE region=? AND delisted=0 AND (ticker LIKE ? OR name LIKE ?) "
             "ORDER BY CASE WHEN ticker=? THEN 0 WHEN name=? THEN 1 WHEN ticker LIKE ? THEN 2 WHEN name LIKE ? THEN 3 ELSE 4 END, name LIMIT ?",
-            (like, like, needle, needle, prefix, prefix, limit)).fetchall()
+            (market.region(), like, like, needle, needle, prefix, prefix, limit)).fetchall()
     return [dict(row) for row in rows]
 
 
 @router.get("/instruments/{ticker}")
 def instrument(ticker: str):
     with db_session() as db:
-        item = db.execute("SELECT * FROM instruments WHERE ticker=?", (ticker,)).fetchone()
+        item = db.execute("SELECT * FROM instruments WHERE ticker=? AND region=?", (ticker, market.region())).fetchone()
         if not item:
             raise HTTPException(404, "instrument not found")
         item = dict(item)
-        quote = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date DESC LIMIT 1", (ticker,)).fetchone()
+        quote = db.execute(f"SELECT * FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date DESC LIMIT 1", (ticker,)).fetchone()
         fund = db.execute("SELECT * FROM snapshots_fundamental WHERE ticker=? ORDER BY date DESC LIMIT 1", (ticker,)).fetchone()
     metric = ticker_snapshot(ticker)
     quote = dict(quote) if quote else {}
@@ -332,6 +412,8 @@ def _chart_plots(spec: str, valid: pd.DataFrame) -> list[dict[str, Any]]:
 def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000), plots: str = Query("")):
     if source not in {"local", "alphasquare"}:
         raise HTTPException(422, "invalid source")
+    if source == "alphasquare" and market.active().region != market.KR.region:
+        raise HTTPException(409, "alpha-square 분봉 차트는 한국 주식 모드에서만 지원합니다")
     if source == "local" and range not in {"3m", "6m", "1y", "3y", "max"}:
         raise HTTPException(422, "invalid range")
     try:
@@ -355,10 +437,10 @@ def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), fr
         frame["halted"] = 0
     else:
         with db_session() as db:
-            item = db.execute("SELECT kind FROM instruments WHERE ticker=?", (ticker,)).fetchone()
+            item = db.execute("SELECT kind FROM instruments WHERE ticker=? AND region=?", (ticker, market.region())).fetchone()
             if not item:
                 raise HTTPException(404, "instrument not found")
-            as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE ticker=?", (ticker,)).fetchone()[0]
+            as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE ticker=? AND source=?", (ticker, bar_source())).fetchone()[0]
             if not as_of:
                 return {"ticker": ticker, "adjusted": False, "price_jump_flag": False, "bars": [], "overlays": {}, "source": source, "freq": None}
             start = (pd.Timestamp(as_of) - pd.Timedelta(days={"3m": 92, "6m": 184, "1y": 366, "3y": 1096, "max": 100000}[range])).strftime("%Y-%m-%d")
@@ -369,7 +451,11 @@ def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), fr
             # tail(최신 봉)이 최신이어도 head(과거 봉)가 이전에 더 좁은 range로 캐시된 채 남아있을 수 있다.
             floor = db.execute("SELECT earliest_attempted FROM bars_coverage WHERE ticker=? AND source='adjusted'", (ticker,)).fetchone()
             incomplete = floor is None or floor[0] > start
-            if not rows or stale or incomplete:
+            # 수정주가 보정은 KRX history API로만 받는다. 미국은 Massive 일봉이 이미 수정주가라
+            # 별도 보정 없이 저장된 스냅샷을 그대로 쓴다.
+            if market.active().region != market.KR.region:
+                rows = []
+            elif not rows or stale or incomplete:
                 try:
                     history = KRXProvider().history(ticker, start, as_of, item["kind"], adjusted=True)
                     if not history.empty:
@@ -381,7 +467,7 @@ def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), fr
                 except Exception:
                     pass
             if not rows:
-                rows = db.execute("SELECT * FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=? ORDER BY date", (ticker, start)).fetchall()
+                rows = db.execute(f"SELECT * FROM daily_bars WHERE ticker=? AND source='{bar_source()}' AND date>=? ORDER BY date", (ticker, start)).fetchall()
                 adjusted = False
         frame = pd.DataFrame([dict(row) for row in rows])
         if frame.empty:
@@ -432,6 +518,7 @@ def get_market_stats(date: str = Query(...)):
 @router.get("/market-live")
 def get_market_live():
     from ..providers.alphasquare import market_overview
+    _require_kr_only(market.require_live_overview)
     return market_overview()
 
 
@@ -561,8 +648,10 @@ def delete_trade(trade_id: int):
 
 @router.put("/settings/cash")
 def cash(request: CashRequest):
-    with db_session() as db: db.execute("INSERT INTO settings(key,value) VALUES('cash_krw',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(request.cash_krw),))
-    return {"cash_krw": request.cash_krw}
+    """현금 잔고는 시장 모드마다 따로 저장한다(원화·달러를 한 칸에 섞지 않는다)."""
+    mkt = market.active()
+    with db_session() as db: db.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mkt.cash_key, str(request.cash)))
+    return {"cash": request.cash, "currency": mkt.currency}
 
 def _trading_error(exc: ValueError) -> HTTPException:
     message = str(exc)
@@ -679,6 +768,56 @@ def trading_reconcile():
     broker = _require_broker()
     try:
         return reconcile(broker)
+    except ValueError as exc:
+        raise _trading_error(exc) from exc
+    except KISError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/trading/daemon")
+def trading_daemon():
+    return live.daemon_status()
+
+
+@router.get("/trading/guard")
+def trading_guard():
+    return guard.state(broker_status().get("env"))
+
+
+@router.put("/trading/guard")
+def save_trading_guard(request: GuardRequest):
+    try:
+        guard.save(None, trade_daily_entry_limit=request.daily_entry_limit,
+                   trade_daily_notional_limit_krw=request.daily_notional_limit_krw,
+                   trade_require_paper_first=None if request.require_paper_first is None else int(request.require_paper_first))
+    except ValueError as exc:
+        raise _trading_error(exc) from exc
+    return guard.state(broker_status().get("env"))
+
+
+@router.post("/trading/guard/kill")
+def toggle_kill_switch(request: KillSwitchRequest):
+    guard.engage(request.reason, None) if request.engaged else guard.release(None)
+    return guard.state(broker_status().get("env"))
+
+
+@router.post("/trading/panic")
+def trading_panic(request: PanicRequest):
+    """킬스위치를 올리고 시장에 남아 있는 주문을 전부 취소한다. 브로커가 없으면 킬스위치만 올린다."""
+    broker = broker_from_config()
+    try:
+        return live.panic(broker=broker, reason=request.reason)
+    except ValueError as exc:
+        raise _trading_error(exc) from exc
+    except KISError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.post("/trading/manage")
+def trading_manage_open_orders():
+    broker = _require_broker()
+    try:
+        return manage_open_orders(broker=broker, timeout_sec=0.0)
     except ValueError as exc:
         raise _trading_error(exc) from exc
     except KISError as exc:

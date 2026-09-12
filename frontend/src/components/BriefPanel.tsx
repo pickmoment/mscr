@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ViewKey } from '../App';
 import { api, BriefData, BriefScreen, JobStatus } from '../lib/api';
-import { won } from '../lib/format';
+import { money } from '../lib/format';
 import { phaseLabel } from '../lib/labels';
 import { SelectTicker } from '../lib/nav';
 import NextSteps from './NextSteps';
 import Term from './Term';
+import { marketInfo } from '../lib/market';
 import ViewHeader from './ViewHeader';
 
 const ROW_CAP = 10;
@@ -101,6 +102,8 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
   }, []);
 
   const running = capturing || (job?.running ?? false);
+  // 계획·히트는 국내 전용이다. 미국 모드 브리핑에서는 그 줄을 아예 그리지 않는다.
+  const trading = marketInfo().trading;
 
   const summary = useMemo(() => {
     if (!data) return null;
@@ -153,7 +156,7 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
               {enteredRows.map(row => <tr key={row.ticker} onClick={() => onSelect(row.ticker, tickers)} title="종목 상세로 이동">
                 <td>{row.name ?? row.ticker}<span className="subtle mono"> {row.ticker}</span></td>
                 <td className="subtle">{dash(row.market)}</td>
-                <td className="num">{won(row.close)}</td>
+                <td className="num">{money(row.close)}</td>
                 <td className={`num ${changeClass(row.change_pct)}`}>{signedPct(row.change_pct)}</td>
                 <td className="num">{row.rank}</td>
               </tr>)}
@@ -223,8 +226,8 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
         <span className="badge" data-tone={summary.exited ? 'down' : undefined}>이탈 {summary.exited}</span>
         <span className="badge" data-tone={summary.near ? 'warn' : undefined}>트리거 대기 {summary.near}</span>
         <span className="badge" data-tone={summary.reached ? 'accent' : undefined}>목표 도달 {summary.reached}</span>
-        <span className="badge" data-tone={summary.unprotected ? 'danger' : undefined}>손절 없는 보유 {summary.unprotected}</span>
-        <span className="badge" data-tone={data.heat.over_limit ? 'danger' : undefined}><Term id="heat">히트</Term> {pctText(data.heat.heat_pct)}</span>
+        {trading && <span className="badge" data-tone={summary.unprotected ? 'danger' : undefined}>손절 없는 보유 {summary.unprotected}</span>}
+        {trading && <span className="badge" data-tone={data.heat.over_limit ? 'danger' : undefined}><Term id="heat">히트</Term> {pctText(data.heat.heat_pct)}</span>}
       </div>
 
       {!!data.warnings.length && <div className="stack">
@@ -248,7 +251,7 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
           <div className="msg">신호 로그가 비어 있습니다. 저장된 스크리너 프리셋을 과거 거래일에 다시 돌려 적중 종목을 쌓아야 신규 편입·이탈·연속 편입일을 볼 수 있습니다. 위의 <b>신호 수집</b> 버튼이 오늘 하루치를 채웁니다.</div>
         </div>}
 
-      <div className="stack">
+      {trading && <div className="stack">
         <div className="toolbar">
           <div className="section-title">계획</div>
           <span className="badge">{plans.length}건</span>
@@ -265,16 +268,16 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
                 {plan.triggered && <span className="badge" data-tone="live"> 트리거</span>}
                 {!plan.triggered && plan.near && <span className="badge" data-tone="warn"> 근접</span>}
               </td>
-              <td className="num">{won(plan.close)}</td>
-              <td className="num">{won(plan.entry_price)}</td>
-              <td className="num">{won(plan.stop_price)}</td>
+              <td className="num">{money(plan.close)}</td>
+              <td className="num">{money(plan.entry_price)}</td>
+              <td className="num">{money(plan.stop_price)}</td>
               <td className={`num ${plan.near ? 'ok' : 'muted'}`}>{signedPct(plan.distance_pct)}</td>
               <td className="subtle">{dash(plan.reason)}</td>
             </tr>)}
             {!plans.length && <tr><td colSpan={8} className="subtle">활성 계획이 없습니다. 계획 화면에서 진입가·손절가를 정한 계획을 만들면 여기에서 거리와 트리거 여부를 봅니다.</td></tr>}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       <div className="stack">
         <div className="toolbar">
@@ -288,8 +291,8 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
             {data.watchlist.reached.map(item => <tr key={`${item.watchlist_id}-${item.ticker}`} onClick={() => onSelect(item.ticker, reachedTickers)} title="종목 상세로 이동">
               <td className="subtle">{item.watchlist}</td>
               <td>{item.name ?? item.ticker}<span className="subtle mono"> {item.ticker}</span></td>
-              <td className="num">{won(item.close)}</td>
-              <td className="num">{won(item.target_price)}</td>
+              <td className="num">{money(item.close)}</td>
+              <td className="num">{money(item.target_price)}</td>
               <td className={`num ${changeClass(item.target_gap_pct == null ? null : -item.target_gap_pct)}`}>{signedPct(item.target_gap_pct)}</td>
             </tr>)}
             {!data.watchlist.reached.length && <tr><td colSpan={5} className="subtle">목표가에 닿은 종목이 없습니다.</td></tr>}
@@ -309,8 +312,8 @@ export default function BriefPanel({ onSelect, onOpenView }: { onSelect: SelectT
             {data.positions.map(position => <tr key={position.ticker} onClick={() => onSelect(position.ticker, positionTickers)} title="종목 상세로 이동">
               <td>{position.name}<span className="subtle mono"> {position.ticker}</span></td>
               <td className="num">{position.quantity.toLocaleString('ko-KR')}</td>
-              <td className="num">{won(position.avg_cost)}</td>
-              <td className="num">{won(position.last_close)}</td>
+              <td className="num">{money(position.avg_cost)}</td>
+              <td className="num">{money(position.last_close)}</td>
               <td className={`num ${changeClass(position.unrealized_pct)}`}>{signedPct(position.unrealized_pct)}</td>
               <td className="num">{pctText(position.weight_pct)}</td>
               <td>{position.plan_name ?? <span className="badge" data-tone="danger">손절 없음</span>}</td>

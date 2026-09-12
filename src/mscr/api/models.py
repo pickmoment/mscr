@@ -43,7 +43,8 @@ class TradeRequest(BaseModel):
     memo: str | None = None
 
 class CashRequest(BaseModel):
-    cash_krw: float = Field(ge=0)
+    """현금 잔고. 통화는 현재 시장 모드를 따른다(한국=원, 미국=달러)."""
+    cash: float = Field(ge=0)
 
 class TradePlanRequest(BaseModel):
     id: int | None = None
@@ -115,6 +116,21 @@ class BrokerCredentialRequest(BaseModel):
     env: Literal["paper", "real"] = "paper"
 
 
+class GuardRequest(BaseModel):
+    daily_entry_limit: int | None = Field(default=None, ge=0, le=1000)
+    daily_notional_limit_krw: int | None = Field(default=None, ge=0)
+    require_paper_first: bool | None = None
+
+
+class KillSwitchRequest(BaseModel):
+    engaged: bool
+    reason: str = Field(default="화면에서 정지", max_length=200)
+
+
+class PanicRequest(BaseModel):
+    reason: str = Field(default="화면에서 긴급 정지", max_length=200)
+
+
 class ActiveEnvRequest(BaseModel):
     env: Literal["paper", "real"]
 
@@ -127,12 +143,22 @@ class KRXCredentialRequest(BaseModel):
 
 class PreferenceRequest(BaseModel):
     request_delay_sec: float = Field(ge=0, le=10)
+    massive_request_delay_sec: float | None = Field(default=None, ge=0, le=60)
 
 
 class IngestRunRequest(BaseModel):
     days: int = Field(default=400, gt=0, le=3650)
     force: bool = False
-    source: Literal["krx", "fdr", "alphasquare"] = "krx"
+    # 시장 모드마다 쓸 수 있는 소스가 다르다(한국 krx/fdr/alphasquare, 미국 massive).
+    source: Literal["krx", "fdr", "alphasquare", "massive"] | None = None
+
+
+class MarketRequest(BaseModel):
+    market: Literal["kr", "us"]
+
+
+class MassiveCredentialRequest(BaseModel):
+    api_key: str | None = Field(default=None, max_length=200)
 
 
 class WatchlistRequest(BaseModel):
@@ -141,7 +167,8 @@ class WatchlistRequest(BaseModel):
 
 class WatchlistItemRequest(BaseModel):
     watchlist_id: int | None = None
-    ticker: str = Field(pattern=r"^\d{6}$")
+    # 한국 6자리 코드와 미국 티커를 모두 받는다. 시장별 형식 검사는 watchlist 쪽에서 한다.
+    ticker: str = Field(pattern=r"^[A-Za-z0-9.\-]{1,12}$")
     memo: str | None = Field(default=None, max_length=500)
     target_price: float | None = Field(default=None, gt=0)
 

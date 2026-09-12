@@ -1,7 +1,7 @@
 """관심종목 목록과 편입 종목을 관리한다.
 
 목록은 이름으로 구분하고, 편입 시점의 종가(`added_price`)를 함께 남겨 편입 후 성과를 추적한다.
-시세는 EOD 스냅샷(`daily_bars.source='krx_snapshot'`)의 최근 2개 봉만 읽으므로 목록 크기에
+시세는 EOD 스냅샷(`daily_bars.source=f'{bar_source()}'`)의 최근 2개 봉만 읽으므로 목록 크기에
 비례하는 인덱스 조회로 끝난다.
 """
 
@@ -11,7 +11,9 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
+from . import market
 from .db import db_session
+from .market import bar_source
 
 NAME_LIMIT = 60
 MEMO_LIMIT = 500
@@ -29,9 +31,7 @@ def _clean_name(name: Any) -> str:
 
 
 def _clean_ticker(ticker: Any) -> str:
-    cleaned = str(ticker or "").strip()
-    if len(cleaned) != 6 or not cleaned.isdigit(): raise ValueError("종목코드는 6자리 숫자여야 합니다")
-    return cleaned
+    return market.clean_ticker(ticker)
 
 
 def _clean_memo(memo: Any) -> str | None:
@@ -52,16 +52,26 @@ def _clean_target(target: Any) -> float | None:
 
 
 def _require_watchlist(db: sqlite3.Connection, watchlist_id: int) -> sqlite3.Row:
-    row = db.execute("SELECT * FROM watchlists WHERE id=?", (watchlist_id,)).fetchone()
+    row = db.execute("SELECT * FROM watchlists WHERE id=? AND region=?", (watchlist_id, market.region())).fetchone()
     if row is None: raise ValueError("관심목록을 찾을 수 없습니다")
     return row
 
 
+def _require_free_name(db: sqlite3.Connection, name: str, watchlist_id: int | None = None) -> None:
+    """목록 이름은 시장을 가로질러 유일하다(테이블 UNIQUE 제약). 다른 시장과 부딪히면 그렇다고 알려준다."""
+    row = db.execute("SELECT id,region FROM watchlists WHERE name=?", (name,)).fetchone()
+    if row is None or row["id"] == watchlist_id: return
+    if row["region"] != market.region(): raise ValueError("다른 시장 모드에 같은 이름의 관심목록이 있습니다")
+    raise ValueError("같은 이름의 관심목록이 있습니다")
+
+
 def _default_watchlist_id(db: sqlite3.Connection) -> int:
-    row = db.execute("SELECT id FROM watchlists ORDER BY id LIMIT 1").fetchone()
+    mkt = market.active()
+    row = db.execute("SELECT id FROM watchlists WHERE region=? ORDER BY id LIMIT 1", (mkt.region,)).fetchone()
     if row: return int(row[0])
     now = _now()
-    return int(db.execute("INSERT INTO watchlists(name,created_at,updated_at) VALUES(?,?,?)", (DEFAULT_NAME, now, now)).lastrowid)
+    name = DEFAULT_NAME if mkt.region == market.KR.region else f"{DEFAULT_NAME} ({mkt.label})"
+    return int(db.execute("INSERT INTO watchlists(name,region,created_at,updated_at) VALUES(?,?,?,?)", (name, mkt.region, now, now)).lastrowid)
 
 
 def list_watchlists(ticker: str | None = None, path=None) -> list[dict[str, Any]]:
@@ -72,8 +82,8 @@ def list_watchlists(ticker: str | None = None, path=None) -> list[dict[str, Any]
             "SELECT w.id,w.name,w.created_at,w.updated_at,"
             "(SELECT COUNT(*) FROM watchlist_items i WHERE i.watchlist_id=w.id) item_count,"
             "(SELECT COUNT(*) FROM watchlist_items i WHERE i.watchlist_id=w.id AND i.ticker=?) hit "
-            "FROM watchlists w ORDER BY w.name",
-            (target or "",)).fetchall()
+            "FROM watchlists w WHERE w.region=? ORDER BY w.name",
+            (target or "", market.region())).fetchall()
     return [{"id": row["id"], "name": row["name"], "created_at": row["created_at"], "updated_at": row["updated_at"], "item_count": row["item_count"], "contains": bool(target and row["hit"])} for row in rows]
 
 
@@ -81,8 +91,8 @@ def create_watchlist(name: str, path=None) -> dict[str, Any]:
     cleaned = _clean_name(name)
     now = _now()
     with db_session(path) as db:
-        if db.execute("SELECT 1 FROM watchlists WHERE name=?", (cleaned,)).fetchone(): raise ValueError("같은 이름의 관심목록이 있습니다")
-        watchlist_id = int(db.execute("INSERT INTO watchlists(name,created_at,updated_at) VALUES(?,?,?)", (cleaned, now, now)).lastrowid)
+        _require_free_name(db, cleaned)
+        watchlist_id = int(db.execute("INSERT INTO watchlists(name,region,created_at,updated_at) VALUES(?,?,?,?)", (cleaned, market.region(), now, now)).lastrowid)
     return {"id": watchlist_id, "name": cleaned, "created_at": now, "updated_at": now, "item_count": 0, "contains": False}
 
 
@@ -91,8 +101,7 @@ def rename_watchlist(watchlist_id: int, name: str, path=None) -> dict[str, Any]:
     now = _now()
     with db_session(path) as db:
         _require_watchlist(db, watchlist_id)
-        clash = db.execute("SELECT id FROM watchlists WHERE name=?", (cleaned,)).fetchone()
-        if clash and clash[0] != watchlist_id: raise ValueError("같은 이름의 관심목록이 있습니다")
+        _require_free_name(db, cleaned, watchlist_id)
         db.execute("UPDATE watchlists SET name=?,updated_at=? WHERE id=?", (cleaned, now, watchlist_id))
     return {"id": watchlist_id, "name": cleaned, "updated_at": now}
 
@@ -110,9 +119,9 @@ def save_item(watchlist_id: int | None, ticker: str, memo: Any = None, target_pr
     target = _clean_target(target_price)
     now = _now()
     with db_session(path) as db:
-        if not db.execute("SELECT 1 FROM instruments WHERE ticker=?", (code,)).fetchone(): raise ValueError("등록되지 않은 종목코드입니다")
+        if not db.execute("SELECT 1 FROM instruments WHERE ticker=? AND region=?", (code, market.region())).fetchone(): raise ValueError("등록되지 않은 종목코드입니다")
         resolved = _default_watchlist_id(db) if watchlist_id is None else int(_require_watchlist(db, watchlist_id)["id"])
-        added_price = db.execute("SELECT close FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date DESC LIMIT 1", (code,)).fetchone()
+        added_price = db.execute(f"SELECT close FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date DESC LIMIT 1", (code,)).fetchone()
         db.execute(
             "INSERT INTO watchlist_items(watchlist_id,ticker,memo,target_price,added_price,added_at) VALUES(?,?,?,?,?,?) "
             "ON CONFLICT(watchlist_id,ticker) DO UPDATE SET memo=excluded.memo,target_price=excluded.target_price",
@@ -128,15 +137,15 @@ def create_from_tickers(name: str, tickers: list[str], path=None) -> dict[str, A
     if not codes: raise ValueError("담을 종목이 없습니다")
     now = _now()
     with db_session(path) as db:
-        if db.execute("SELECT 1 FROM watchlists WHERE name=?", (cleaned,)).fetchone(): raise ValueError("같은 이름의 관심목록이 있습니다")
+        _require_free_name(db, cleaned)
         placeholders = ",".join("?" * len(codes))
-        known = {row[0] for row in db.execute(f"SELECT ticker FROM instruments WHERE ticker IN ({placeholders})", codes).fetchall()}
+        known = {row[0] for row in db.execute(f"SELECT ticker FROM instruments WHERE region=? AND ticker IN ({placeholders})", [market.region(), *codes]).fetchall()}
         added = [code for code in codes if code in known]
         if not added: raise ValueError("등록된 종목이 하나도 없어 목록을 만들지 않았습니다")
         prices = {row[0]: row[1] for row in db.execute(
-            f"SELECT ticker,(SELECT close FROM daily_bars b WHERE b.ticker=i.ticker AND b.source='krx_snapshot' ORDER BY b.date DESC LIMIT 1) FROM instruments i WHERE i.ticker IN ({placeholders})",
+            f"SELECT ticker,(SELECT close FROM daily_bars b WHERE b.ticker=i.ticker AND b.source='{bar_source()}' ORDER BY b.date DESC LIMIT 1) FROM instruments i WHERE i.ticker IN ({placeholders})",
             codes).fetchall()}
-        watchlist_id = int(db.execute("INSERT INTO watchlists(name,created_at,updated_at) VALUES(?,?,?)", (cleaned, now, now)).lastrowid)
+        watchlist_id = int(db.execute("INSERT INTO watchlists(name,region,created_at,updated_at) VALUES(?,?,?,?)", (cleaned, market.region(), now, now)).lastrowid)
         db.executemany(
             "INSERT INTO watchlist_items(watchlist_id,ticker,memo,target_price,added_price,added_at) VALUES(?,?,NULL,NULL,?,?)",
             [(watchlist_id, code, prices.get(code), now) for code in added])
@@ -213,7 +222,7 @@ def snapshot(watchlist_id: int, path=None) -> dict[str, Any]:
             (watchlist_id,)).fetchall()
         rows = []
         for item in items:
-            bars = db.execute("SELECT date,close,volume,value,halted FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date DESC LIMIT 2", (item["ticker"],)).fetchall()
+            bars = db.execute(f"SELECT date,close,volume,value,halted FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date DESC LIMIT 2", (item["ticker"],)).fetchall()
             fundamental = db.execute("SELECT market_cap,per,pbr FROM snapshots_fundamental WHERE ticker=? ORDER BY date DESC LIMIT 1", (item["ticker"],)).fetchone()
             latest = dict(bars[0]) if bars else {}
             previous = dict(bars[1]) if len(bars) > 1 else {}

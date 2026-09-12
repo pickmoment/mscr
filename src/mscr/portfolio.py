@@ -4,7 +4,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from . import market
 from .db import db_session
+from .market import bar_source
 
 @dataclass
 class Position:
@@ -45,13 +47,19 @@ def validate_trade(trade: dict[str, Any], path=None) -> None:
 
 
 def snapshot(path=None) -> dict[str, Any]:
+    """현재 시장 모드의 보유 종목만 집계한다.
+
+    `trades`에는 시장 구분 컬럼이 없어 종목코드 모양으로 나눈다(KRX는 6자리 숫자). 한 화면에
+    원화·달러 평가금액이 섞이지 않게 하는 것이 목적이다."""
+    mkt = market.active()
     with db_session(path) as db:
-        trades = [dict(row) for row in db.execute("SELECT * FROM trades ORDER BY trade_date,id").fetchall()]
+        trades = [dict(row) for row in db.execute("SELECT * FROM trades ORDER BY trade_date,id").fetchall()
+                  if market.region_of(row["ticker"]) == mkt.region]
         positions, realized = replay_trades(trades)
-        names = {row["ticker"]: row["name"] for row in db.execute("SELECT ticker,name FROM instruments").fetchall()}
-        latest_rows = db.execute("""SELECT b.ticker,b.close,b.date,(SELECT p.close FROM daily_bars p WHERE p.ticker=b.ticker AND p.source='krx_snapshot' AND p.date<b.date ORDER BY p.date DESC LIMIT 1) previous_close FROM daily_bars b JOIN (SELECT ticker,MAX(date) date FROM daily_bars WHERE source='krx_snapshot' GROUP BY ticker) x ON x.ticker=b.ticker AND x.date=b.date WHERE b.source='krx_snapshot'""").fetchall()
+        names = {row["ticker"]: row["name"] for row in db.execute("SELECT ticker,name FROM instruments WHERE region=?", (mkt.region,)).fetchall()}
+        latest_rows = db.execute(f"""SELECT b.ticker,b.close,b.date,(SELECT p.close FROM daily_bars p WHERE p.ticker=b.ticker AND p.source='{bar_source()}' AND p.date<b.date ORDER BY p.date DESC LIMIT 1) previous_close FROM daily_bars b JOIN (SELECT ticker,MAX(date) date FROM daily_bars WHERE source='{bar_source()}' GROUP BY ticker) x ON x.ticker=b.ticker AND x.date=b.date WHERE b.source='{bar_source()}'""").fetchall()
         latest = {row["ticker"]: dict(row) for row in latest_rows}
-        cash_row = db.execute("SELECT value FROM settings WHERE key='cash_krw'").fetchone()
+        cash_row = db.execute("SELECT value FROM settings WHERE key=?", (mkt.cash_key,)).fetchone()
     output = []; total_market_value = total_cost = total_day_change = 0.0; stale_any = False
     for ticker, position in positions.items():
         bar = latest.get(ticker, {})
@@ -69,7 +77,7 @@ def snapshot(path=None) -> dict[str, Any]:
     cash = float(cash_row[0]) if cash_row else 0.0
 
 
-    return {"positions": output, "total_market_value": total_market_value, "total_cost": total_cost, "total_unrealized": total_unrealized, "total_unrealized_pct": total_unrealized / total_cost if total_cost else None, "total_realized": realized, "total_day_change": total_day_change, "cash_krw": cash, "total_assets": total_market_value + cash, "stale": stale_any}
+    return {"positions": output, "total_market_value": total_market_value, "total_cost": total_cost, "total_unrealized": total_unrealized, "total_unrealized_pct": total_unrealized / total_cost if total_cost else None, "total_realized": realized, "total_day_change": total_day_change, "cash": cash, "currency": mkt.currency, "total_assets": total_market_value + cash, "stale": stale_any}
 
 
 RECONCILE_TOLERANCE = 1e-6
@@ -82,7 +90,7 @@ def reconcile(broker, path=None) -> dict[str, Any]:
     실제 계좌와 어긋나도 지금까지는 감지할 방법이 없었다 — `KISBroker.balance()`는 구현돼
     있었지만 어디서도 호출되지 않았다. 여기서 그 값을 실제로 대조에 쓴다.
 
-    현금은 대조하지 않는다: `cash_krw`는 사용자가 화면에서 직접 입력하는 값이라(증거금·예수금
+    현금은 대조하지 않는다: 현금 잔고는 사용자가 화면에서 직접 입력하는 값이라(증거금·예수금
     정산 시점이 다를 수 있음) 브로커 현금과 다른 게 정상일 수 있다 — 오류로 취급하지 않고
     양쪽 값을 그대로 보여주기만 한다.
     """
@@ -110,5 +118,5 @@ def reconcile(broker, path=None) -> dict[str, Any]:
     return {
         "env": broker.env, "account_masked": broker.account_masked,
         "positions": rows, "mismatched": len(mismatched),
-        "local_cash_krw": local["cash_krw"], "broker_cash_krw": remote["cash_krw"],
+        "local_cash_krw": local["cash"], "broker_cash_krw": remote["cash_krw"],
     }

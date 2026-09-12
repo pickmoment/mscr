@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .db import db_session
+from .market import bar_source
 
 DEFAULT_PROTOCOL: dict[str, Any] = {
     "entry": "next_open",        # "next_open" | "breakout"
@@ -109,7 +110,7 @@ def _load_bars(db, tickers: set[str], rule: dict[str, Any] | None = None) -> dic
         chunk = codes[start:start + TICKER_CHUNK]
         marks = ",".join("?" * len(chunk))
         rows.extend(tuple(row) for row in db.execute(
-            f"SELECT ticker,date,open,high,low,close,halted FROM daily_bars WHERE source='krx_snapshot' AND ticker IN ({marks})", chunk).fetchall())
+            f"SELECT ticker,date,open,high,low,close,halted FROM daily_bars WHERE source='{bar_source()}' AND ticker IN ({marks})", chunk).fetchall())
     if not rows: return dict(EMPTY_BARS)
     frame = pd.DataFrame(rows, columns=["ticker", "date", "open", "high", "low", "close", "halted"])
     for column in ("open", "high", "low", "close"):

@@ -1,7 +1,10 @@
 import type { Time } from 'lightweight-charts';
+import { currentMarket, type MarketInfo, type MarketKey } from './market';
+export type { MarketInfo, MarketKey };
 export type ScreenSpec = { universe: { kinds: string[]; markets: string[]; exclude_preferred: boolean; exclude_spac: boolean; exclude_halted: boolean; min_bars: number }; formula: string; sort: { formula: string; dir: 'asc' | 'desc' }; limit: number; as_of_offset: number };
 export type ScreenRow = { ticker: string; name: string; kind: string; market: string | null; close: number | null; change_pct: number | null; volume: number | null; value: number | null; market_cap: number | null; per: number | null; pbr: number | null; bars_available: number; price_jump_flag: number; halted: number; weighted_return: number | null; _sort?: number | null };
-export type Meta = { as_of: string | null; instrument_count: { stock: number; etf: number }; bars_rows: number; last_ingest_at: string | null; data_ready: boolean };
+export type Meta = { as_of: string | null; instrument_count: { stock: number; etf: number }; bars_rows: number; last_ingest_at: string | null; data_ready: boolean; market: MarketKey; currency: string };
+export type MarketsResponse = { active: MarketKey; default: MarketKey; markets: MarketInfo[] };
 export type Instrument = { ticker: string; name: string; kind: string; market: string | null; category: string | null; base_index: string | null; as_of: string | null; quote: Record<string, number | boolean | null>; fundamental: Record<string, number | null>; bars_available: number; position: Position | null; etf: { nav: number | null; premium_pct: number | null; tracking_error: number | null; top_holdings: { name: string; weight: number }[] | null } | null };
 export type InstrumentHit = { ticker: string; name: string; kind: string; market: string | null };
 export type ChartPoint = { time: Time; value: number };
@@ -17,7 +20,7 @@ export type ChartPlot = { id: string; error: string | null; points: ChartPoint[]
 export type ChartFreq = 'minute-1' | 'minute-3' | 'minute-5' | 'minute-15' | 'minute-30' | 'minute-60' | 'day';
 export type BarsResponse = { ticker: string; adjusted: boolean; price_jump_flag: boolean; bars: ChartBar[]; overlays: Record<string, ChartPoint[]>; rsi?: ChartPoint[]; macd?: Record<string, ChartPoint[]>; bb?: Record<string, ChartPoint[]>; volume_ma?: ChartPoint[]; plots?: ChartPlot[]; source: ChartSource; freq: ChartFreq | null };
 export type Position = { ticker: string; name: string; quantity: number; cost: number; avg_cost: number; last_close: number | null; market_value: number; unrealized: number; unrealized_pct: number | null; day_change: number; weight: number; stale: boolean };
-export type PortfolioData = { positions: Position[]; total_market_value: number; total_cost: number; total_unrealized: number; total_unrealized_pct: number | null; total_realized: number; total_day_change: number; cash_krw: number; total_assets: number; stale: boolean };
+export type PortfolioData = { positions: Position[]; total_market_value: number; total_cost: number; total_unrealized: number; total_unrealized_pct: number | null; total_realized: number; total_day_change: number; cash: number; currency: string; total_assets: number; stale: boolean };
 export type Trade = { id: number; ticker: string; name: string | null; side: 'buy' | 'sell'; trade_date: string; quantity: number; price: number; fee: number; tax: number; memo: string | null };
 export type IndicatorParameter = { name: string; default: number; min: number | null; max: number | null; integer: boolean };
 export type IndicatorDefinition = { id: number | null; key: string; label: string; unit: string; formula: string | null; parameters: IndicatorParameter[]; enabled: boolean; builtin: boolean; series: boolean; kind: 'number' | 'bool' | 'function'; created_at: string | null; updated_at: string | null };
@@ -29,23 +32,29 @@ export type TradePlan = { id: number; name: string; ticker: string; side: 'buy' 
 export type PlanProposalRequest = { ticker: string; side: 'buy' | 'sell'; entry_price: number; max_investment: number; max_loss: number };
 export type PlanCandidate = { stop_atr_multiple: number; stop_distance: number; stop_price: number; rejected: string | null; quantity: number; invested?: number; max_loss_krw?: number; loss_budget_used?: number; leg_quantities?: number[]; tp1_price?: number; tp1_ratio?: number; tp2_price?: number; tp2_ratio?: number; tp3_trailing_pct?: number; reach_tp1_prob?: number; reach_tp2_prob?: number; baseline_expectancy_r?: number; breakeven_tp1_prob?: number };
 export type PlanProposal = { ticker: string; name: string; side: 'buy' | 'sell'; entry_price: number; as_of: string | null; reference_close: number | null; atr: number; atr_pct: number; max_investment: number; max_loss: number; binding: 'max_loss' | 'max_investment'; sample: { observations: number; horizon_days: number }; candidates: PlanCandidate[]; recommended: number; recommendation_reason: string; warnings: string[]; risk_budget: RiskBudget; plan: Omit<TradePlan, 'id' | 'name' | 'note' | 'setup' | 'updated_at'> };
-export type PlanEvaluation = { plan_id: number; name: string; ticker: string; side: string; phase: TradePlanPhase; next_leg: TradePlanLeg | null; triggered: boolean; reason: string; as_of: string | null; close: number | null; order_side: 'buy' | 'sell' | null; order_quantity: number | null };
-export type BrokerOrder = { id: number | null; plan_id: number | null; plan_name: string | null; leg: TradePlanLeg | null; as_of: string | null; ticker: string; side: string; quantity: number; order_type: string; limit_price: number | null; status: string; env: string; broker_order_id: string | null; filled_quantity: number; filled_price: number | null; fee: number; tax: number; trade_id: number | null; message: string | null; requested_at: string; updated_at: string };
+export type PlanEvaluation = { plan_id: number; name: string; ticker: string; side: string; phase: TradePlanPhase; next_leg: TradePlanLeg | null; triggered: boolean; reason: string; as_of: string | null; close: number | null; order_side: 'buy' | 'sell' | null; order_quantity: number | null; live?: boolean; halted?: boolean; setup?: string | null };
+export type DaemonStatus = { status: string; alive: boolean; stale: boolean; phase: 'before' | 'open' | 'closing' | 'after' | 'holiday'; env?: string | null; pid?: number | null; mode?: string | null; stream?: string | null; plans?: number; tickers?: number; ticks?: number; orders?: number; started_at?: string | null; heartbeat_at?: string | null; stopped_at?: string | null; last_tick_at?: string | null; last_error?: string | null; message?: string | null; heartbeat_age_sec: number | null };
+export type GuardState = { trade_kill_switch: number; trade_kill_reason: string; trade_daily_entry_limit: number; trade_daily_notional_limit_krw: number; trade_require_paper_first: number; env: string | null; usage: { date: string; entries: number; notional_krw: number }; entries_remaining: number | null; notional_remaining_krw: number | null; blocked: boolean };
+export type PanicResult = { guard: GuardState; cancelled: BrokerOrder[] };
+export type BrokerOrder = { id: number | null; plan_id: number | null; plan_name: string | null; leg: TradePlanLeg | null; as_of: string | null; ticker: string; side: string; quantity: number; order_type: string; limit_price: number | null; status: string; env: string; broker_order_id: string | null; filled_quantity: number; filled_price: number | null; fee: number; tax: number; trade_id: number | null; org_no: string | null; origin: string; trigger_price: number | null; replaces_order_id: number | null; message: string | null; requested_at: string; updated_at: string };
 export type PlanSimulationLeg = { leg: TradePlanLeg; date: string; price: number; quantity: number };
 export type PlanSimulation = { plan_id: number; name: string; ticker: string; side: string; start: string; end: string; bars: number; entry_price: number; stop_price: number; r_unit: number; phase: TradePlanPhase; entered: boolean; legs: PlanSimulationLeg[]; realized_krw: number | null; realized_r: number | null; open_quantity: number | null; open_r: number | null; total_r: number | null; last_close: number | null; warnings: string[] };
 export type ReconcileRow = { ticker: string; name: string; local_quantity: number; broker_quantity: number; quantity_diff: number; local_avg_cost: number | null; broker_avg_cost: number | null; matched: boolean };
 export type ReconcileResult = { env: string; account_masked: string | null; positions: ReconcileRow[]; mismatched: number; local_cash_krw: number; broker_cash_krw: number };
-export type AppSettings = { mscr_home: string; db_path: string; schema_version: number; credential_paths: { krx: string; kis: string }; request_delay_sec: number; request_delay_source: 'default' | 'env' | 'file'; krx: { mode: 'openapi' | 'idpw' | 'anonymous'; source: 'env' | 'file' | null; openapi_key_masked: string | null; krx_id_masked: string | null; stored: string[] }; kis: TradingStatus; ingest_defaults: { days: number; force: boolean; source: 'krx' | 'fdr' | 'alphasquare' }; data: { as_of: string | null; bars_rows: number; instrument_count: { stock: number; etf: number }; last_ingest_at: string | null } };
-export type IngestStatus = { running: boolean; source?: 'krx' | 'fdr' | 'alphasquare'; days?: number; force?: boolean; started_at?: string; finished_at?: string | null; processed?: number; total?: number | null; current_day?: string | null; ok?: boolean | null; error?: string | null };
+export type IngestSource = 'krx' | 'fdr' | 'alphasquare' | 'massive';
+export type MassiveStatus = { mode: 'apikey' | 'anonymous'; source: 'env' | 'file' | null; api_key_masked: string | null; stored: string[]; signup_url: string; request_delay_sec: number };
+export type AppSettings = { mscr_home: string; db_path: string; schema_version: number; expected_schema_version: number; market: MarketInfo; default_market: MarketKey; credential_paths: { krx: string; kis: string; massive: string }; request_delay_sec: number; request_delay_source: 'default' | 'env' | 'file'; krx: { mode: 'openapi' | 'idpw' | 'anonymous'; source: 'env' | 'file' | null; openapi_key_masked: string | null; krx_id_masked: string | null; stored: string[] }; massive: MassiveStatus; kis: TradingStatus; ingest_defaults: { days: number; force: boolean; source: IngestSource; sources: IngestSource[] }; data: { as_of: string | null; bars_rows: number; instrument_count: { stock: number; etf: number }; last_ingest_at: string | null } };
+export type IngestStatus = { running: boolean; source?: IngestSource; days?: number; force?: boolean; market?: MarketKey; started_at?: string; finished_at?: string | null; processed?: number; total?: number | null; current_day?: string | null; ok?: boolean | null; error?: string | null };
 export type MarketBreadth = { count: number; up: number; down: number; flat: number; limit_up: number; limit_down: number; new_high: number; new_low: number; halted: number };
 export type MarketRankRow = { ticker: string; name: string; market: string | null; close: number | null; change_pct: number | null; value: number | null; volume: number | null; vol_ratio: number | null; premium_pct: number | null };
 export type MarketCapBand = { category: string; count: number; avg_change_pct: number | null; value_sum: number | null };
 export type MarketQuantiles = { q1: number | null; median: number | null; q3: number | null };
 export type MarketStats = {
   date: string; requested_date: string; prev_date: string | null;
-  counts: { total: number; stock: number; etf: number; kospi: number; kosdaq: number };
-  breadth: { all: MarketBreadth; kospi: MarketBreadth; kosdaq: MarketBreadth; etf: MarketBreadth };
-  volume: { value_sum: number | null; value_sum_prev: number | null; volume_sum: number | null; market_cap_sum: { KOSPI: number | null; KOSDAQ: number | null } };
+  market: MarketKey; currency: string; exchanges: string[];
+  counts: { total: number; stock: number; etf: number; by_market: Record<string, number> };
+  breadth: { all: MarketBreadth; etf: MarketBreadth; by_market: Record<string, MarketBreadth> };
+  volume: { value_sum: number | null; value_sum_prev: number | null; volume_sum: number | null; market_cap_sum: Record<string, number | null> };
   rankings: { value_top: MarketRankRow[]; volume_surge_top: MarketRankRow[]; gainers_top: MarketRankRow[]; losers_top: MarketRankRow[] };
   etf_rankings: { value_top: MarketRankRow[]; gainers_top: MarketRankRow[]; losers_top: MarketRankRow[]; premium_top: MarketRankRow[] };
   sectors: MarketCapBand[];
@@ -127,7 +136,8 @@ const request = async <T>(path: string, init?: RequestInit, options?: RequestOpt
   }
   let response: Response;
   try {
-    response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...init, signal: controller.signal });
+    // 모든 요청에 현재 시장 모드를 실어 보낸다. 서버는 이 헤더로 유니버스·시세 소스를 고른다.
+    response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-market': currentMarket(), ...(init?.headers as Record<string, string> | undefined) }, signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       if (timedOut) throw new Error(`서버 응답이 ${timeoutMs / 1000}초 넘게 없습니다. mscr 서버가 실행 중인지 확인하세요.`);
@@ -160,14 +170,18 @@ export const api = {
   trades: () => request<Trade[]>('/api/trades'),
   addTrade: (trade: Omit<Trade, 'id' | 'name'>) => request<{ id: number }>('/api/trades', { method: 'POST', body: JSON.stringify(trade) }),
   deleteTrade: (id: number) => request<void>(`/api/trades/${id}`, { method: 'DELETE' }),
-  cash: (cash_krw: number) => request<{ cash_krw: number }>('/api/settings/cash', { method: 'PUT', body: JSON.stringify({ cash_krw }) }),
+  cash: (cash: number) => request<{ cash: number; currency: string }>('/api/settings/cash', { method: 'PUT', body: JSON.stringify({ cash }) }),
+  markets: () => request<MarketsResponse>('/api/markets'),
+  saveDefaultMarket: (market: MarketKey) => request<{ default: MarketKey }>('/api/markets/default', { method: 'PUT', body: JSON.stringify({ market }) }),
   settings: () => request<AppSettings>('/api/settings'),
   saveKrxCredentials: (payload: { openapi_key?: string; krx_id?: string; krx_pw?: string }) => request<AppSettings>('/api/settings/krx', { method: 'PUT', body: JSON.stringify(payload) }),
   clearKrxCredentials: () => request<AppSettings>('/api/settings/krx', { method: 'DELETE' }),
-  savePreferences: (payload: { request_delay_sec: number }) => request<AppSettings>('/api/settings/preferences', { method: 'PUT', body: JSON.stringify(payload) }),
-  krxLatest: () => request<{ as_of: string }>('/api/ingest/krx-latest'),
+  savePreferences: (payload: { request_delay_sec: number; massive_request_delay_sec?: number }) => request<AppSettings>('/api/settings/preferences', { method: 'PUT', body: JSON.stringify(payload) }),
+  saveMassiveCredentials: (payload: { api_key?: string }) => request<AppSettings>('/api/settings/massive', { method: 'PUT', body: JSON.stringify(payload) }),
+  clearMassiveCredentials: () => request<AppSettings>('/api/settings/massive', { method: 'DELETE' }),
+  latestDay: () => request<{ as_of: string }>('/api/ingest/latest'),
   ingestStatus: () => request<IngestStatus>('/api/ingest/status'),
-  runIngest: (payload: { days: number; force: boolean; source: 'krx' | 'fdr' | 'alphasquare' }) => request<IngestStatus>('/api/ingest/run', { method: 'POST', body: JSON.stringify(payload) }),
+  runIngest: (payload: { days: number; force: boolean; source: IngestSource }) => request<IngestStatus>('/api/ingest/run', { method: 'POST', body: JSON.stringify(payload) }),
   tradingStatus: () => request<TradingStatus>('/api/trading/status'),
   saveBrokerCredentials: (credential: BrokerCredential) => request<TradingStatus>('/api/trading/credentials', { method: 'PUT', body: JSON.stringify(credential) }),
   deleteBrokerCredentials: (env: 'paper' | 'real') => request<TradingStatus>(`/api/trading/credentials?env=${env}`, { method: 'DELETE' }),
@@ -182,6 +196,12 @@ export const api = {
   tradeOrders: (limit = 200) => request<BrokerOrder[]>(`/api/trading/orders?limit=${limit}`),
   simulatePlan: (planId: number, start: string, end: string) => request<PlanSimulation>(`/api/trading/plans/${planId}/simulate?start=${start}&end=${end}`),
   reconcile: () => request<ReconcileResult>('/api/trading/reconcile'),
+  daemonStatus: () => request<DaemonStatus>('/api/trading/daemon'),
+  guardState: () => request<GuardState>('/api/trading/guard'),
+  saveGuard: (payload: { daily_entry_limit?: number; daily_notional_limit_krw?: number; require_paper_first?: boolean }) => request<GuardState>('/api/trading/guard', { method: 'PUT', body: JSON.stringify(payload) }),
+  toggleKillSwitch: (engaged: boolean, reason = '화면에서 정지') => request<GuardState>('/api/trading/guard/kill', { method: 'POST', body: JSON.stringify({ engaged, reason }) }),
+  panic: (reason = '화면에서 긴급 정지') => request<PanicResult>('/api/trading/panic', { method: 'POST', body: JSON.stringify({ reason }) }),
+  manageOpenOrders: () => request<BrokerOrder[]>('/api/trading/manage', { method: 'POST' }),
   marketStatsDates: () => request<{ dates: string[] }>('/api/market-stats/dates'),
   marketStats: (date: string) => request<MarketStats>(`/api/market-stats?date=${date}`),
   marketLive: () => request<MarketLiveOverview>('/api/market-live'),

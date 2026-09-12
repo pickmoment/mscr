@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, ReviewPlanResult, ReviewStats } from '../../lib/api';
 import { SelectTicker } from '../../lib/nav';
-import { won } from '../../lib/format';
+import { money } from '../../lib/format';
 import ViewHeader from '../ViewHeader';
 import Term from '../Term';
 import { EquitySpark, pctPoint, reviewColumns, rMultiple, rTone } from './shared';
@@ -90,7 +90,7 @@ export default function ReviewView({ onSelect }: { onSelect: SelectTicker }) {
             <td>{row.name}</td>
             <td>{row.setup ? <span className="chip">{row.setup}</span> : <span className="subtle">—</span>}</td>
             <td><span className="badge" data-tone={row.status === 'open' ? 'live' : 'ok'}>{row.status === 'open' ? '보유 중' : '청산'}</span></td>
-            <td className="num">{won(row.entry_price)} <span className="subtle">{row.entry_slippage_pct == null ? '' : `(${row.entry_slippage_pct >= 0 ? '+' : ''}${row.entry_slippage_pct.toFixed(2)}%)`}</span></td>
+            <td className="num">{money(row.entry_price)} <span className="subtle">{row.entry_slippage_pct == null ? '' : `(${row.entry_slippage_pct >= 0 ? '+' : ''}${row.entry_slippage_pct.toFixed(2)}%)`}</span></td>
             <td className={`num ${rTone(row.realized_r)}`}>{rMultiple(row.realized_r)}</td>
             <td className={`num ${rTone(row.open_r)}`}>{rMultiple(row.open_r)}</td>
             <td className="num down">{rMultiple(row.mae_r)}</td>

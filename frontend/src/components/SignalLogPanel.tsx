@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, JobStatus, SignalCoverage, SignalDiff, SignalRow } from '../lib/api';
 import { SelectTicker } from '../lib/nav';
-import { won } from '../lib/format';
+import { money } from '../lib/format';
 import Term from './Term';
 
 // 보유 종목은 수백 건이 될 수 있어 결과 영역 한 화면에 담기는 만큼만 보여주고 나머지는 건수로 알린다.
@@ -50,7 +50,7 @@ export default function SignalLogPanel({ screenId, screenName, onSelect }: { scr
   const signalRows = (rows: SignalRow[], streak: boolean) => rows.map(row => <tr key={row.ticker} onClick={() => onSelect(row.ticker, diffTickers)} title="종목 상세로 이동">
     <td>{row.name || row.ticker}<span className="subtle mono"> {row.ticker}</span></td>
     <td className="num">{row.rank}</td>
-    <td className="num">{won(row.close)}</td>
+    <td className="num">{money(row.close)}</td>
     {streak && <td className="num">연속 {row.streak_days ?? diff?.streaks[row.ticker]?.days ?? 1}일</td>}
   </tr>);
 

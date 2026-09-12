@@ -211,6 +211,11 @@ html { scrollbar-color: var(--line-2) transparent; scrollbar-width: thin; }
 .subtab[aria-selected='true'] { color: var(--accent-ink); background: var(--accent); }
 .subtab:disabled { opacity: .45; cursor: not-allowed; }
 
+/* 시장 모드 전환 — 상단바에서 한국·미국 중 하나만 켠다. */
+.market-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--rp); background: var(--surface-2); }
+.market-switch .btn { padding: 3px var(--s3); }
+.market-switch .btn[data-active='true'] { color: var(--accent-ink); background: var(--accent); }
+
 .content { min-height: 0; padding: var(--s5) var(--s6) var(--s6); }
 .content > section { height: 100%; min-height: 0; }
 

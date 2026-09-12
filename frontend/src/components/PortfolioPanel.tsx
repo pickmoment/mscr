@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, PortfolioData, Trade } from '../lib/api';
-import { compactVolume, pct, won } from '../lib/format';
+import { compactMoney, pct, money } from '../lib/format';
 import { SelectTicker } from '../lib/nav';
 import TickerSearch from './TickerSearch';
 import ViewHeader from './ViewHeader';
@@ -27,14 +27,14 @@ export default function PortfolioPanel({ onSelect }: { onSelect: SelectTicker })
   if (!data) return <div className="panel empty">포트폴리오를 불러오는 중…</div>;
   // 카드마다 "이 숫자가 어디서 나온 값인지"를 한 줄로 붙인다.
   const stats: [string, string, string][] = [
-    ['총 평가금액', won(data.total_market_value), '보유 종목 현재가 × 수량'],
-    ['총 매입금액', won(data.total_cost), '실제 매수에 쓴 금액'],
-    ['평가손익', won(data.total_unrealized), '평가금액 − 매입금액'],
+    ['총 평가금액', money(data.total_market_value), '보유 종목 현재가 × 수량'],
+    ['총 매입금액', money(data.total_cost), '실제 매수에 쓴 금액'],
+    ['평가손익', money(data.total_unrealized), '평가금액 − 매입금액'],
     ['수익률', pct(data.total_unrealized_pct), '매입금액 대비'],
-    ['당일 손익', won(data.total_day_change), '전일 종가 대비'],
-    ['실현손익', won(data.total_realized), '매도로 확정된 손익'],
-    ['현금', won(data.cash_krw), '직접 입력한 값'],
-    ['총자산', won(data.total_assets), '평가금액 + 현금'],
+    ['당일 손익', money(data.total_day_change), '전일 종가 대비'],
+    ['실현손익', money(data.total_realized), '매도로 확정된 손익'],
+    ['현금', money(data.cash), '직접 입력한 값'],
+    ['총자산', money(data.total_assets), '평가금액 + 현금'],
   ];
   // 티커·구분은 입력 방식이 달라 따로 그리고, 나머지는 라벨과 타입만 다른 같은 입력이라 돌려 만든다.
   const tradeFields: [Exclude<keyof typeof form, 'ticker' | 'side'>, string, string][] = [
@@ -64,12 +64,12 @@ export default function PortfolioPanel({ onSelect }: { onSelect: SelectTicker })
           {data.positions.map(position => <tr key={position.ticker} onClick={() => onSelect(position.ticker, data.positions.map(item => item.ticker))}>
             <td><b>{position.name}</b><span className="muted mono"> {position.ticker}</span></td>
             <td className="num">{position.quantity}</td>
-            <td className="num">{won(position.avg_cost)}</td>
-            <td className="num">{won(position.last_close)}</td>
-            <td className="num">{won(position.market_value)}</td>
-            <td className={position.unrealized >= 0 ? 'num up' : 'num down'}>{won(position.unrealized)}</td>
+            <td className="num">{money(position.avg_cost)}</td>
+            <td className="num">{money(position.last_close)}</td>
+            <td className="num">{money(position.market_value)}</td>
+            <td className={position.unrealized >= 0 ? 'num up' : 'num down'}>{money(position.unrealized)}</td>
             <td className="num">{pct(position.unrealized_pct)}</td>
-            <td className="num">{won(position.day_change)}</td>
+            <td className="num">{money(position.day_change)}</td>
             <td className="num">{pct(position.weight)}</td>
           </tr>)}
         </tbody>
@@ -92,7 +92,7 @@ export default function PortfolioPanel({ onSelect }: { onSelect: SelectTicker })
         <div className="toolbar"><button className="btn btn--primary">거래 추가</button></div>
       </form>
       <div className="toolbar toolbar--tight">
-        <input className="w-md" type="number" placeholder={`현금 ${compactVolume(data.cash_krw)}`} value={cash} onChange={e => setCash(e.target.value)} />
+        <input className="w-md" type="number" placeholder={`현금 ${compactMoney(data.cash)}`} value={cash} onChange={e => setCash(e.target.value)} />
         <button className="btn btn--ghost" onClick={updateCash}>현금 저장</button>
         {message && <span className="msg">{message}</span>}
       </div>
@@ -103,9 +103,9 @@ export default function PortfolioPanel({ onSelect }: { onSelect: SelectTicker })
             <td>{trade.trade_date}</td>
             <td className={trade.side === 'buy' ? 'up' : 'down'}>{trade.side === 'buy' ? '매수' : '매도'}</td>
             <td>{trade.name || trade.ticker}</td>
-            <td className="num">{trade.quantity}주 × {won(trade.price)}</td>
-            <td className="num">{won(trade.fee)}</td>
-            <td className="num">{won(trade.tax)}</td>
+            <td className="num">{trade.quantity}주 × {money(trade.price)}</td>
+            <td className="num">{money(trade.fee)}</td>
+            <td className="num">{money(trade.tax)}</td>
             <td>{trade.memo || '—'}</td>
             <td><button className="btn btn--danger btn--sm" onClick={() => removeTrade(trade)}>삭제</button></td>
           </tr>)}

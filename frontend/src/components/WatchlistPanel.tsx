@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, Watchlist, WatchlistDetail } from '../lib/api';
-import { won } from '../lib/format';
+import { money } from '../lib/format';
 import { SelectTicker } from '../lib/nav';
 import TickerSearch from './TickerSearch';
 import ViewHeader from './ViewHeader';
@@ -174,9 +174,9 @@ export default function WatchlistPanel({ onSelect }: { onSelect: SelectTicker })
                 {detail.rows.map(row => <tr key={row.ticker} aria-selected={selected.includes(row.ticker)}>
                   <td><input type="checkbox" aria-label={`${row.name} 선택`} checked={selected.includes(row.ticker)} onChange={event => setSelected(current => event.target.checked ? [...current, row.ticker] : current.filter(item => item !== row.ticker))} /></td>
                   <td onClick={() => onSelect(row.ticker, detail.rows.map(item => item.ticker))} title="종목 상세로 이동">{row.name}<span className="subtle mono"> {row.ticker}</span>{row.halted ? ' ⏸' : ''}</td>
-                  <td className="num">{won(row.close)}</td>
+                  <td className="num">{money(row.close)}</td>
                   <td className={`num ${changeClass(row.change_pct)}`}>{signedPct(row.change_pct)}</td>
-                  <td className="num">{won(row.added_price)}</td>
+                  <td className="num">{money(row.added_price)}</td>
                   <td className={`num ${changeClass(row.since_added_pct)}`}>{signedPct(row.since_added_pct)}</td>
                   <td><input className="cell-input" type="number" min="0" step="1" defaultValue={row.target_price ?? ''} key={`target-${row.ticker}-${row.target_price ?? ''}`} aria-label={`${row.name} 목표가`}
                     onBlur={event => { const raw = event.target.value.trim(); const next = raw ? Number(raw) : null; if (next !== row.target_price) patchItem(row.ticker, row.memo, next); }} /></td>

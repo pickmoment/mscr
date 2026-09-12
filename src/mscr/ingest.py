@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import pandas as pd
 
+from . import market
 from .db import db_session
 from .providers.krx import KRXProvider, fdr_stock_snapshot
 
@@ -23,6 +24,19 @@ PRESETS = {
 }
 
 
+# 미국 프리셋은 달러 기준 금액·최저가를 쓰고, 재무 스냅샷(PER·시가총액)을 쓰지 않는다 —
+# Massive 무료 플랜에서 전종목 재무를 받으려면 종목마다 개별 호출이 필요해 수집하지 않는다.
+US_PRESETS = {
+    "거래량 급증 (미국)": {"universe": {"kinds": ["stock", "etf"], "markets": [], "exclude_preferred": True, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "prior_avg_ratio(volume, 20) >= 3 and value >= 50000000 and close >= 5", "sort": {"formula": "prior_avg_ratio(volume, 20)", "dir": "desc"}, "limit": 500},
+    "52주 신고가 근접 (미국)": {"universe": {"kinds": ["stock", "etf"], "markets": [], "exclude_preferred": True, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "close / rolling_max(high, 250) - 1 >= -0.03 and value >= 30000000", "sort": {"formula": "close / rolling_max(high, 250) - 1", "dir": "desc"}, "limit": 500},
+    "골든크로스 (미국)": {"universe": {"kinds": ["stock", "etf"], "markets": [], "exclude_preferred": True, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "crosses_above(sma(close, 5), sma(close, 20)) and value >= 10000000", "sort": {"formula": "value", "dir": "desc"}, "limit": 500},
+    "과매도 반등 후보 (미국)": {"universe": {"kinds": ["stock", "etf"], "markets": [], "exclude_preferred": True, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "rsi(close, 14) <= 30 and returns(close, 20) <= -0.15 and sma(value, 20) >= 20000000", "sort": {"formula": "rsi(close, 14)", "dir": "asc"}, "limit": 500},
+    "미너비니 추세 템플릿 (미국)": {"universe": {"kinds": ["stock"], "markets": [], "exclude_preferred": True, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "sma(close, 20) > sma(close, 60) and returns(close, 120) >= 0 and returns(close, 250) >= 0 and close / rolling_min(low, 250) - 1 >= 0.3 and close / rolling_max(high, 250) - 1 >= -0.25 and value >= 10000000 and close >= 5", "sort": {"formula": "returns(close, 120)", "dir": "desc"}, "limit": 500},
+    "3R 목표 후보 (미국)": {"universe": {"kinds": ["stock"], "markets": [], "exclude_preferred": False, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "sma(value, 20) > 30000000 and close / rolling_max(high, 60) >= 0.96 and sma(close, 60) > sma(close, 120) and close >= 5", "sort": {"formula": "atr(high, low, close, 14) / close", "dir": "asc"}, "limit": 5},
+    "박스 조임 후보 (미국)": {"universe": {"kinds": ["stock"], "markets": [], "exclude_preferred": False, "exclude_spac": True, "exclude_halted": True, "min_bars": 250}, "formula": "sma(value, 20) > 30000000 and close / rolling_max(high, 60) >= 0.96 and sma(close, 60) > sma(close, 120) and (rolling_max(high, 20) - rolling_min(low, 20)) / close < 0.08 and (rolling_max(high, 20) - rolling_min(low, 20)) / close >= 0.03 and close >= 5", "sort": {"formula": "atr(high, low, close, 14) / close", "dir": "asc"}, "limit": 5},
+}
+
+
 def _text(value):
     return None if pd.isna(value) else str(value)
 
@@ -35,31 +49,56 @@ def _today():
     return pd.Timestamp.now().date()
 
 
-def _upsert_universe(db, frame: pd.DataFrame, as_of: str, kind: str) -> None:
+def _normalize_ticker(value, mkt) -> str:
+    """KRX는 6자리 숫자로 0을 채우고, 미국은 대문자 티커를 그대로 쓴다."""
+    text = str(value or "").strip()
+    return text.zfill(6) if mkt.region == market.KR.region else text.upper()
+
+
+def _flag(row, key: str, fallback: int) -> int:
+    value = row.get(key)
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return fallback
+    return int(value)
+
+
+def _upsert_universe(db, frame: pd.DataFrame, as_of: str, kind: str | None, mkt) -> None:
+    """`kind`가 None이면 프레임의 kind 컬럼을 쓴다(미국 유니버스는 주식·ETF가 한 응답에 섞여 온다)."""
     if frame.empty:
         return
     rows = []
     for row in frame.to_dict("records"):
-        ticker = str(row.get("ticker", "")).zfill(6)
+        ticker = _normalize_ticker(row.get("ticker"), mkt)
         name = _text(row.get("name")) or ticker
-        rows.append((ticker, name, kind, _text(row.get("market")), _text(row.get("category")), _text(row.get("base_index")), int(kind == "stock" and not ticker.endswith("0")), int("스팩" in name), as_of, as_of))
+        row_kind = kind or str(row.get("kind") or "stock")
+        rows.append((
+            ticker, name, row_kind, mkt.region, _text(row.get("market")), _text(row.get("category")), _text(row.get("base_index")),
+            _flag(row, "is_preferred", int(mkt.region == market.KR.region and row_kind == "stock" and not ticker.endswith("0"))),
+            _flag(row, "is_spac", int("스팩" in name)), as_of, as_of,
+        ))
     db.executemany("""
-      INSERT INTO instruments(ticker,name,kind,market,category,base_index,is_preferred,is_spac,first_seen,last_seen,delisted)
-      VALUES(?,?,?,?,?,?,?,?,?,?,0)
-      ON CONFLICT(ticker) DO UPDATE SET name=excluded.name, market=COALESCE(excluded.market,instruments.market), category=COALESCE(excluded.category,instruments.category), base_index=COALESCE(excluded.base_index,instruments.base_index), last_seen=excluded.last_seen, delisted=0
+      INSERT INTO instruments(ticker,name,kind,region,market,category,base_index,is_preferred,is_spac,first_seen,last_seen,delisted)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,0)
+      ON CONFLICT(ticker) DO UPDATE SET name=excluded.name, kind=excluded.kind, region=excluded.region, market=COALESCE(excluded.market,instruments.market), category=COALESCE(excluded.category,instruments.category), base_index=COALESCE(excluded.base_index,instruments.base_index), is_preferred=excluded.is_preferred, is_spac=excluded.is_spac, last_seen=excluded.last_seen, delisted=0
     """, rows)
-    db.execute("UPDATE instruments SET delisted=1 WHERE last_seen < ? AND kind=?", (as_of, kind))
 
 
-def _store_bars(db, frame: pd.DataFrame, day: str) -> int:
+def _mark_delisted(db, as_of: str, kinds, region: str) -> None:
+    """이번 유니버스 응답에 없던 종목은 상장폐지로 표시한다. 다른 시장의 종목은 건드리지 않는다."""
+    for kind in kinds:
+        db.execute("UPDATE instruments SET delisted=1 WHERE last_seen < ? AND kind=? AND region=?", (as_of, kind, region))
+
+
+def _store_bars(db, frame: pd.DataFrame, day: str, mkt=None) -> int:
+    mkt = mkt or market.active()
     if frame.empty:
         return 0
     rows = []
     for row in frame.to_dict("records"):
-        ticker = str(row.get("ticker", "")).zfill(6)
+        ticker = _normalize_ticker(row.get("ticker"), mkt)
         close = _num(row.get("close")); open_ = _num(row.get("open")); high = _num(row.get("high")); low = _num(row.get("low")); volume = _num(row.get("volume")); value = _num(row.get("value"))
         halted = int(close is not None and close > 0 and open_ == high == low == volume == 0)
-        rows.append((ticker, day, "krx_snapshot", open_, high, low, close, volume, value, _num(row.get("nav")), halted))
+        rows.append((ticker, day, mkt.bar_source, open_, high, low, close, volume, value, _num(row.get("nav")), halted))
     db.executemany("""
       INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -80,14 +119,24 @@ def _already_done(db, day: str, kind: str, force: bool) -> bool:
     return bool(row and row[0] in ("ok", "holiday"))
 
 
-def _seed_presets(db) -> None:
+def _seed_presets(db, mkt=None) -> None:
+    mkt = mkt or market.active()
+    presets = US_PRESETS if mkt.region == market.US.region else PRESETS
     now = pd.Timestamp.now().isoformat(timespec="seconds")
-    for name, spec in PRESETS.items():
-        db.execute("INSERT INTO screens(name,spec,created_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(name) DO NOTHING", (name, json.dumps(spec, ensure_ascii=False), now, now))
+    for name, spec in presets.items():
+        db.execute("INSERT INTO screens(name,region,spec,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO NOTHING", (name, mkt.region, json.dumps(spec, ensure_ascii=False), now, now))
 
 
-def latest_trading_day(provider=None) -> str:
-    """전체 ingest 없이 KRX가 실제로 발표한 최신 거래일만 조회한다."""
+def latest_trading_day(provider=None, mkt=None) -> str:
+    """전체 ingest 없이 데이터 제공처가 실제로 발표한 최신 거래일만 조회한다."""
+    mkt = mkt or market.active()
+    if mkt.region == market.US.region:
+        from .providers.massive import MassiveProvider
+
+        try:
+            return (provider or MassiveProvider()).latest_trading_day()
+        except Exception as exc:
+            raise RuntimeError(f"Massive 최근 거래일 조회에 실패했습니다: {exc}") from exc
     provider = provider or KRXProvider()
     try:
         as_of = provider.latest_trading_day()
@@ -95,16 +144,21 @@ def latest_trading_day(provider=None) -> str:
         raise RuntimeError(f"KRX 최근 거래일 조회에 실패했습니다: {exc}. API 키와 해당 서비스 이용 승인 상태를 확인하세요.") from exc
     return pd.Timestamp(as_of).strftime("%Y-%m-%d")
 
-def run_ingest(days: int = 400, force: bool = False, provider=None, source: str = "krx", path=None, on_progress=None) -> None:
+def run_ingest(days: int = 400, force: bool = False, provider=None, source: str | None = None, path=None, on_progress=None, mkt=None) -> None:
     """`on_progress`는 각 거래일 처리 후 (idx, total, day, stock_rows, etf_rows)로 호출된다. 웹 UI가 백그라운드 진행 상황을 폴링하는 데 쓴다."""
+    mkt = mkt or market.active()
+    source = source or mkt.default_ingest_source
+    if source not in mkt.ingest_sources:
+        raise ValueError(f"{mkt.label} 주식 모드에서 지원하지 않는 소스입니다: {source} (가능: {', '.join(mkt.ingest_sources)})")
+    if mkt.region == market.US.region:
+        _run_ingest_massive(days=days, force=force, provider=provider, path=path, on_progress=on_progress)
+        return
     if source == "fdr":
         _run_ingest_fdr_stocks(force=force, path=path)
         return
     if source == "alphasquare":
         _run_ingest_alphasquare(days=days, force=force, path=path)
         return
-    if source != "krx":
-        raise ValueError(f"지원하지 않는 소스입니다: {source}")
     provider = provider or KRXProvider()
     try:
         as_of = provider.latest_trading_day()
@@ -115,8 +169,9 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
     # days=1이 "가장 최근 거래일 하루"가 되도록 하나 적게 뺀다.
     trading_days = sorted(provider.trading_days(end - timedelta(days=days - 1), end), reverse=True)
     with db_session(path) as db:
-        _upsert_universe(db, provider.stock_universe(as_of), as_of, "stock")
-        _upsert_universe(db, provider.etf_universe(as_of), as_of, "etf")
+        _upsert_universe(db, provider.stock_universe(as_of), as_of, "stock", market.KR)
+        _upsert_universe(db, provider.etf_universe(as_of), as_of, "etf", market.KR)
+        _mark_delisted(db, as_of, ("stock", "etf"), market.KR.region)
         for idx, ts in enumerate(trading_days, 1):
             day = pd.Timestamp(ts).strftime("%Y-%m-%d")
             started = time.monotonic(); stock_rows = etf_rows = 0
@@ -128,7 +183,7 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
                     if frame.empty:
                         _record_run(db, day, kind, "holiday", 0, int((time.monotonic() - started) * 1000))
                     else:
-                        count = _store_bars(db, frame, day)
+                        count = _store_bars(db, frame, day, market.KR)
                         if kind == "stock": stock_rows = count
                         else: etf_rows = count
                         _record_run(db, day, kind, "ok", count, int((time.monotonic() - started) * 1000))
@@ -149,7 +204,7 @@ def run_ingest(days: int = 400, force: bool = False, provider=None, source: str 
                 _record_run(db, as_of, "fundamental", "ok", len(rows), int((time.monotonic() - started) * 1000))
             except Exception as exc:
                 _record_run(db, as_of, "fundamental", "failed", 0, int((time.monotonic() - started) * 1000), str(exc))
-        _seed_presets(db)
+        _seed_presets(db, market.KR)
 
 
 def _run_ingest_fdr_stocks(force: bool = False, path=None) -> None:
@@ -166,7 +221,7 @@ def _run_ingest_fdr_stocks(force: bool = False, path=None) -> None:
         if not known:
             raise RuntimeError("종목 유니버스가 비어 있습니다. 먼저 KRX 소스로 `mscr ingest`를 한 번 실행하세요.")
         matched = frame[frame["ticker"].isin(known)]
-        count = _store_bars(db, matched, day)
+        count = _store_bars(db, matched, day, market.KR)
         _record_run(db, day, "stock", "ok", count, int((time.monotonic() - started) * 1000))
     print(f"[fdr] {day} stock={count} ({time.monotonic() - started:.1f}s)", file=sys.stderr)
 
@@ -205,9 +260,61 @@ def _run_ingest_alphasquare(days: int = 400, force: bool = False, path=None) -> 
             counts: dict[str, int] = {}
             if not frame.empty:
                 for day, group in frame[frame["date"].isin(target_days)].groupby("date"):
-                    counts[day] = _store_bars(db, group.drop(columns="date"), day)
+                    counts[day] = _store_bars(db, group.drop(columns="date"), day, market.KR)
             elapsed_ms = int((time.monotonic() - started) * 1000)
             for day in target_days:
                 count = counts.get(day, 0)
                 _record_run(db, day, kind, "ok" if count else "holiday", count, elapsed_ms)
             print(f"[alphasquare] {kind} {target_days[0]}~{target_days[-1]} {sum(counts.values())}행 ({time.monotonic() - started:.1f}s)", file=sys.stderr)
+
+
+def _run_ingest_massive(days: int = 30, force: bool = False, provider=None, path=None, on_progress=None) -> None:
+    """Massive의 "일별 시장 요약"으로 거래일마다 미국 전종목 일봉을 한 번씩 받아 채운다.
+
+    무료 플랜은 분당 5회 제한이라 호출 간 지연이 길다(기본 12초). `--days`를 늘릴수록 그만큼
+    오래 걸리므로, 매일 돌릴 때는 최근 며칠만 확인하는 쪽이 낫다.
+    """
+    from .providers.massive import MassiveError, MassiveProvider
+
+    mkt = market.US
+    bars_kind, universe_kind = mkt.ingest_kinds
+    try:
+        provider = provider or MassiveProvider()
+        as_of = provider.latest_trading_day()
+    except MassiveError as exc:
+        raise RuntimeError(str(exc)) from exc
+    end = pd.Timestamp(as_of).date()
+    # trading_days는 양 끝을 포함한다. days=1이 "가장 최근 거래일 하루"가 되도록 하나 적게 뺀다.
+    trading_days = sorted(provider.trading_days(end - timedelta(days=days - 1), end), reverse=True)
+    with db_session(path) as db:
+        if not _already_done(db, as_of, universe_kind, force):
+            started = time.monotonic()
+            try:
+                universe = provider.universe()
+                _upsert_universe(db, universe, as_of, None, mkt)
+                _mark_delisted(db, as_of, ("stock", "etf"), mkt.region)
+                _record_run(db, as_of, universe_kind, "ok", len(universe), int((time.monotonic() - started) * 1000))
+                print(f"[massive] universe {len(universe)}종목 ({time.monotonic() - started:.1f}s)", file=sys.stderr)
+            except Exception as exc:
+                _record_run(db, as_of, universe_kind, "failed", 0, int((time.monotonic() - started) * 1000), str(exc))
+                raise RuntimeError(f"Massive 종목 목록 조회에 실패했습니다: {exc}") from exc
+        for idx, ts in enumerate(trading_days, 1):
+            day = pd.Timestamp(ts).strftime("%Y-%m-%d")
+            if _already_done(db, day, bars_kind, force):
+                if on_progress is not None:
+                    on_progress(idx, len(trading_days), day, 0, 0)
+                continue
+            started = time.monotonic(); count = 0
+            try:
+                frame = provider.daily_snapshot(day)
+                if frame.empty:
+                    _record_run(db, day, bars_kind, "holiday", 0, int((time.monotonic() - started) * 1000))
+                else:
+                    count = _store_bars(db, frame, day, mkt)
+                    _record_run(db, day, bars_kind, "ok", count, int((time.monotonic() - started) * 1000))
+            except Exception as exc:
+                _record_run(db, day, bars_kind, "failed", 0, int((time.monotonic() - started) * 1000), str(exc))
+            print(f"[massive {idx}/{len(trading_days)}] {day} bars={count} {time.monotonic() - started:.1f}s", file=sys.stderr)
+            if on_progress is not None:
+                on_progress(idx, len(trading_days), day, count, 0)
+        _seed_presets(db, mkt)

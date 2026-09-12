@@ -14,23 +14,37 @@ import HelpPanel from './components/HelpPanel';
 import { TradingProvider } from './components/trading/TradingContext';
 import PlansView from './components/trading/PlansView';
 import OrdersView from './components/trading/OrdersView';
+import AutoView from './components/trading/AutoView';
 import RiskView from './components/trading/RiskView';
 import ReviewView from './components/trading/ReviewView';
 import { SelectTicker } from './lib/nav';
+import { allMarkets, applyMarkets, currentMarket, marketInfo, setMarket, type MarketKey } from './lib/market';
 
 type Theme = 'dark' | 'light';
-export type ViewKey = 'brief' | 'screener' | 'stats' | 'live' | 'watchlist' | 'plans' | 'orders'
+export type ViewKey = 'brief' | 'screener' | 'stats' | 'live' | 'watchlist' | 'plans' | 'orders' | 'auto'
   | 'portfolio' | 'risk' | 'review' | 'indicators' | 'settings' | 'help' | 'detail';
 type AreaKey = 'brief' | 'explore' | 'operate' | 'tools';
+
+// 화면마다 어떤 시장 기능이 있어야 열리는지. 미국 모드에서는 계획·주문·자동 실행·리스크·복기와
+// 현재 시황이 빠진다(브로커 실주문과 국내 전용 시황 소스에 묶인 화면들).
+const requires: Partial<Record<ViewKey, 'trading' | 'live_overview'>> = {
+  plans: 'trading', orders: 'trading', auto: 'trading', risk: 'trading', review: 'trading', live: 'live_overview',
+};
+const viewAllowed = (view: ViewKey): boolean => {
+  const need = requires[view];
+  return !need || marketInfo()[need];
+};
 
 // 영역은 "지금 무엇을 하는 중인가"고, 하위 탭은 그 안의 작업 순서다. 운용 하위 탭 순서가 곧 실제 절차다.
 const areas: { key: AreaKey; label: string; views: { key: ViewKey; label: string }[] }[] = [
   { key: 'brief', label: '브리핑', views: [{ key: 'brief', label: '오늘의 브리핑' }] },
   { key: 'explore', label: '탐색', views: [{ key: 'screener', label: '스크리너' }, { key: 'stats', label: '시장 통계' }, { key: 'live', label: '현재 시황' }] },
-  { key: 'operate', label: '운용', views: [{ key: 'watchlist', label: '관심종목' }, { key: 'plans', label: '계획' }, { key: 'orders', label: '주문 실행' }, { key: 'portfolio', label: '포트폴리오' }, { key: 'risk', label: '리스크' }, { key: 'review', label: '복기' }] },
+  { key: 'operate', label: '운용', views: [{ key: 'watchlist', label: '관심종목' }, { key: 'plans', label: '계획' }, { key: 'orders', label: '주문 실행' }, { key: 'auto', label: '자동 실행' }, { key: 'portfolio', label: '포트폴리오' }, { key: 'risk', label: '리스크' }, { key: 'review', label: '복기' }] },
   { key: 'tools', label: '도구', views: [{ key: 'indicators', label: '지표 관리' }, { key: 'settings', label: '설정' }, { key: 'help', label: '도움말' }] },
 ];
-const areaKeys = areas.map(area => area.key);
+const visibleAreas = () => areas
+  .map(area => ({ ...area, views: area.views.filter(item => viewAllowed(item.key)) }))
+  .filter(area => area.views.length > 0);
 const areaOf = (view: ViewKey): AreaKey | null => areas.find(area => area.views.some(item => item.key === view))?.key ?? null;
 const labelOf = (view: ViewKey): string => areas.flatMap(area => area.views).find(item => item.key === view)?.label ?? '이전 화면';
 
@@ -42,7 +56,7 @@ const initialTheme = (): Theme => {
 // 'detail'은 저장하지 않는다 — 선택 종목이 없는 채로 빈 상세를 열고 시작하게 된다.
 const initialView = (): ViewKey => {
   const saved = localStorage.getItem('mscr-view');
-  return saved && saved !== 'detail' && areaOf(saved as ViewKey) ? saved as ViewKey : 'brief';
+  return saved && saved !== 'detail' && areaOf(saved as ViewKey) && viewAllowed(saved as ViewKey) ? saved as ViewKey : 'brief';
 };
 
 const SunIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.6v2.2M12 19.2v2.2M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.4 19.6 6 18M18 6l1.6-1.6" /></svg>;
@@ -57,6 +71,8 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [meta, setMeta] = useState<Meta | null>(null);
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [market, setMarketKey] = useState<MarketKey>(currentMarket);
+  const [markets, setMarkets] = useState(allMarkets);
   const [tradesVersion, setTradesVersion] = useState(0);
   const areaBar = useRef<HTMLElement>(null);
   const viewBar = useRef<HTMLElement>(null);
@@ -65,7 +81,23 @@ export default function App() {
   // 먼저 돌기 때문에 data-theme을 effect에서 바꾸면 자식이 직전 테마 색을 집어간다. 렌더 시점에
   // 미리 반영해 둔다 — 외부 DOM 상태에 대한 멱등 쓰기다.
   if (document.documentElement.dataset.theme !== theme) document.documentElement.dataset.theme = theme;
-  useEffect(() => { api.meta().then(setMeta).catch(() => undefined); }, []);
+  useEffect(() => { setMeta(null); api.meta().then(setMeta).catch(() => undefined); }, [market]);
+  // 서버가 정의한 시장 목록으로 화면의 기본값을 덮어쓴다(기능 범위가 바뀌어도 탭이 따라간다).
+  useEffect(() => { api.markets().then(result => { applyMarkets(result.markets); setMarkets(allMarkets()); }).catch(() => undefined); }, []);
+
+  // 시장을 바꾸면 선택 종목·검색어를 버리고 모든 화면을 새로 마운트한다. 한쪽 시장의 종목코드가
+  // 다른 시장 화면에 남아 빈 상세를 띄우는 일을 막는다.
+  const switchMarket = useCallback((next: MarketKey) => {
+    if (next === currentMarket()) return;
+    setMarket(next);
+    setMarketKey(next);
+    setSelectedTicker(null);
+    setSiblings([]);
+    setQuery('');
+    if (!viewAllowed(view)) openView('brief');
+    else if (view === 'detail') openView(returnView);
+    api.saveDefaultMarket(next).catch(() => undefined);
+  }, [view, returnView]);
   useEffect(() => {
     localStorage.setItem('mscr-theme', theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#f3f6fa' : '#0b0e13');
@@ -100,10 +132,12 @@ export default function App() {
     const next = stepKey(event, areaKeys, lastArea);
     if (!next) return;
     event.preventDefault();
-    openView(areas.find(area => area.key === next)!.views[0].key);
+    openView(shownAreas.find(area => area.key === next)!.views[0].key);
     requestAnimationFrame(() => areaBar.current?.querySelector<HTMLButtonElement>(`#area-${next}`)?.focus());
   };
-  const currentViews = areas.find(area => area.key === lastArea)!.views;
+  const shownAreas = visibleAreas();
+  const areaKeys = shownAreas.map(area => area.key);
+  const currentViews = (shownAreas.find(area => area.key === lastArea) ?? shownAreas[0]).views;
   const onViewKeyDown = (event: React.KeyboardEvent) => {
     const next = stepKey(event, currentViews.map(item => item.key), view);
     if (!next) return;
@@ -112,8 +146,8 @@ export default function App() {
     requestAnimationFrame(() => viewBar.current?.querySelector<HTMLButtonElement>(`#view-${next}`)?.focus());
   };
 
-  const panel = (key: ViewKey, node: React.ReactNode) => <section
-    key={key}
+  const panel = (key: ViewKey, node: React.ReactNode) => viewAllowed(key) && <section
+    key={`${key}-${market}`}
     role="tabpanel"
     id={`panel-${key}`}
     {...(key === 'detail' ? { 'aria-label': '종목 상세' } : { 'aria-labelledby': `view-${key}` })}
@@ -127,13 +161,24 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <img className="brand-mark" src="/icon.svg" alt="" width="30" height="30" />
-      <div className="brand">mscr<small>MARKET SCREENER / KRX</small></div>
+      <div className="brand">mscr<small>MARKET SCREENER / {market === 'us' ? 'US' : 'KRX'}</small></div>
       <div className="status-strip">
         <span className="status-dot" data-live={meta != null} />
         <span>EOD</span>
         <b className="mono">{meta?.as_of || '데이터 없음'}</b>
         <span className="sep">·</span>
         <span>{instruments == null ? '연결 중' : <><b className="mono">{instruments.toLocaleString('ko-KR')}</b> 종목</>}</span>
+      </div>
+      <div className="market-switch" role="radiogroup" aria-label="시장 모드 전환">
+        {markets.map(item => <button
+          key={item.key}
+          className="btn btn--ghost btn--sm"
+          type="button"
+          role="radio"
+          aria-checked={market === item.key}
+          data-active={market === item.key}
+          onClick={() => switchMarket(item.key)}
+        >{item.label}</button>)}
       </div>
       <div className="push">
         <TickerSearch
@@ -154,7 +199,7 @@ export default function App() {
     </header>
 
     <nav className="areas" role="tablist" aria-label="영역 전환" ref={areaBar} onKeyDown={onAreaKeyDown}>
-      {areas.map(area => <button
+      {shownAreas.map(area => <button
         key={area.key}
         id={`area-${area.key}`}
         className="area"
@@ -191,13 +236,15 @@ export default function App() {
       {panel('stats', <MarketStatsPanel onSelect={selectTicker} />)}
       {panel('live', <MarketLivePanel onSelect={selectTicker} />)}
       {panel('watchlist', <WatchlistPanel onSelect={selectTicker} />)}
-      {/* 계획·주문·리스크·복기는 같은 데이터를 본다. Provider가 한 번만 읽어 네 화면이 나눠 쓴다. */}
-      <TradingProvider>
+      {/* 계획·주문·리스크·복기는 같은 데이터를 본다. Provider가 한 번만 읽어 네 화면이 나눠 쓴다.
+          미국 모드에서는 이 화면들이 없으므로 Provider도 띄우지 않는다(호출부터 막힌다). */}
+      {marketInfo().trading && <TradingProvider>
         {panel('plans', <PlansView onSelect={selectTicker} />)}
         {panel('orders', <OrdersView />)}
+        {panel('auto', <AutoView />)}
         {panel('risk', <RiskView />)}
         {panel('review', <ReviewView onSelect={selectTicker} />)}
-      </TradingProvider>
+      </TradingProvider>}
       {panel('portfolio', <PortfolioPanel key={tradesVersion} onSelect={selectTicker} />)}
       {panel('indicators', <IndicatorManager />)}
       {panel('settings', <SettingsPanel />)}

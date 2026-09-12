@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
+from . import guard
 from .db import db_session
+from .market import bar_source
 from .portfolio import snapshot
 
 SIDES = {"buy", "sell"}
 ORDER_TYPES = {"limit", "market"}
 OPEN_STATUSES = ("submitted", "partial")
-ACTIVE_LEG_STATUSES = ("dry_run", "submitted", "partial", "filled")
+# 이 상태의 레그는 "이미 시도했다"로 보고 다시 주문하지 않는다. cancelled가 여기 있는 이유는
+# 미체결 진입을 취소한 뒤 같은 자리에 다시 들어가지 않기 위해서다(부분체결분은 filled_quantity에 남는다).
+ACTIVE_LEG_STATUSES = ("dry_run", "submitted", "partial", "filled", "cancelled")
 ORDER_SELECT = "SELECT o.*, p.name plan_name FROM broker_orders o LEFT JOIN trade_plans p ON p.id=o.plan_id"
 
 
@@ -113,10 +117,18 @@ def delete_plan(plan_id: int, path=None) -> None:
         db.execute("DELETE FROM trade_plans WHERE id=?", (int(plan_id),))
 
 
-def _plan_legs(db, plan_ids: list[int]) -> dict[int, dict[str, dict[str, Any]]]:
-    """Latest broker_orders row per (plan_id, leg), keyed by plan_id then leg."""
+def _plan_legs(db, plan_ids: list[int], env: str | None = None) -> dict[int, dict[str, dict[str, Any]]]:
+    """Latest broker_orders row per (plan_id, leg), keyed by plan_id then leg.
+
+    env를 주면 그 환경의 주문만 본다. 같은 계획을 모의계좌에서 먼저 돌려 검증하더라도 실계좌
+    진행 단계가 모의 체결 때문에 앞서 나가지 않는다."""
     if not plan_ids: return {}
-    rows = db.execute(f"SELECT * FROM broker_orders WHERE plan_id IN ({','.join('?' * len(plan_ids))}) AND leg IS NOT NULL ORDER BY id", plan_ids).fetchall()
+    query = f"SELECT * FROM broker_orders WHERE plan_id IN ({','.join('?' * len(plan_ids))}) AND leg IS NOT NULL"
+    params = list(plan_ids)
+    if env:
+        query += " AND env=?"
+        params.append(env)
+    rows = db.execute(f"{query} ORDER BY id", params).fetchall()
     result: dict[int, dict[str, dict[str, Any]]] = {}
     for row in rows:
         order = dict(row)
@@ -125,13 +137,13 @@ def _plan_legs(db, plan_ids: list[int]) -> dict[int, dict[str, dict[str, Any]]]:
 
 
 def _latest_bar(db, ticker: str) -> dict[str, Any] | None:
-    row = db.execute("SELECT date,open,high,low,close,volume FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date DESC LIMIT 1", (ticker,)).fetchone()
+    row = db.execute(f"SELECT date,open,high,low,close,volume,halted FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date DESC LIMIT 1", (ticker,)).fetchone()
     return dict(row) if row else None
 
 
 def _trailing_reference(db, ticker: str, side: str, since_date: str) -> float | None:
     column = "MAX(high)" if side == "buy" else "MIN(low)"
-    value = db.execute(f"SELECT {column} FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=?", (ticker, since_date)).fetchone()[0]
+    value = db.execute(f"SELECT {column} FROM daily_bars WHERE ticker=? AND source='{bar_source()}' AND date>=?", (ticker, since_date)).fetchone()[0]
     return float(value) if value is not None else None
 
 
@@ -148,74 +160,112 @@ def _leg_quantities(quantity: float, tp1_ratio: float, tp2_ratio: float) -> tupl
     return float(first), float(second), float(total - first - second)
 
 
-def _plan_evaluation(db, plan: dict[str, Any], legs: dict[str, dict[str, Any]], latest_date: str | None) -> dict[str, Any]:
+def _leg_filled(info: dict[str, Any] | None, planned: float) -> float:
+    """레그가 실제로 시장에서 채운 수량. 체결 정보가 아직 없으면 주문 수량을 그대로 본다
+    (접수 직후·모의 실행처럼 체결 조회 전 단계)."""
+    if not info: return 0.0
+    filled = float(info.get("filled_quantity") or 0)
+    if filled > 0: return filled
+    return planned if info["status"] in ACTIVE_LEG_STATUSES else 0.0
+
+
+def _position(plan: dict[str, Any], legs: dict[str, dict[str, Any]]) -> dict[str, float]:
+    """계획이 실제로 들고 있는 수량과 각 청산 레그의 주문 수량.
+
+    분모는 계획 수량이 아니라 **진입 실체결 수량**이다. 지정가 진입이 부분체결로 끝나면 익절
+    배분도 그 수량에서 다시 나눠야 보유보다 많이 파는 주문이 나가지 않는다."""
+    quantity = float(plan["quantity"])
+    entry = _leg_filled(legs.get("entry"), quantity)
+    tp1_qty, tp2_qty, trailing_qty = _leg_quantities(entry, plan["tp1_ratio"], plan["tp2_ratio"]) if entry > 0 else (0.0, 0.0, 0.0)
+    remaining = entry - _leg_filled(legs.get("tp1"), tp1_qty) - _leg_filled(legs.get("tp2"), tp2_qty)
+    return {"entry": entry, "tp1": tp1_qty, "tp2": tp2_qty, "trailing": trailing_qty, "remaining": max(0.0, remaining)}
+
+
+def _plan_evaluation(db, plan: dict[str, Any], legs: dict[str, dict[str, Any]], latest_date: str | None, quote: dict[str, Any] | None = None) -> dict[str, Any]:
     ticker = plan["ticker"]
     bar = _latest_bar(db, ticker)
-    if bar is None:
-        return {"phase": "waiting_entry", "next_leg": None, "triggered": False, "reason": "일봉 데이터 없음", "as_of": None, "close": None, "order_side": None, "order_quantity": None}
+    live = quote is not None
+    if not live and bar is None:
+        return {"phase": "waiting_entry", "next_leg": None, "triggered": False, "reason": "일봉 데이터 없음", "as_of": None, "close": None, "order_side": None, "order_quantity": None, "live": False, "halted": False}
     long = plan["side"] == "buy"
     exit_side = "sell" if long else "buy"
-    quantity = float(plan["quantity"])
-    close = float(bar["close"])
-    stale = latest_date is not None and bar["date"] != latest_date
+    close = float(quote["price"]) if live else float(bar["close"])
+    as_of = datetime.now().strftime("%Y-%m-%d") if live else bar["date"]
+    halted = bool(quote.get("halted")) if live else bool(bar.get("halted"))
+    stale = not live and latest_date is not None and bar["date"] != latest_date
+    session_high = float(quote["high"]) if live else float(bar["high"])
+    session_low = float(quote["low"]) if live else float(bar["low"])
+    # 진입·익절은 **지금 가격**으로 본다 — 이미 스쳐 지나간 가격을 뒤늦게 추격해 봐야 계획과 다른 자리에
+    # 들어가고 나올 뿐이다. 반대로 손절·트레일링은 **당일 고저**로 본다 — 데몬이 끊긴 사이 스쳐 간
+    # 이탈도 반드시 잡아야 하기 때문이다. 일봉 모드에서는 둘 다 그 봉의 고저가 된다.
+    reach_up, reach_down = (close, close) if live else (session_high, session_low)
 
+    def hit_up(level: float) -> bool: return reach_up >= level        # 진입·익절: 지금 가격
+    def hit_down(level: float) -> bool: return reach_down <= level
+    def breached(level: float) -> bool:                                # 손절·트레일링: 당일 고저
+        return session_low <= level if long else session_high >= level
+
+    base = {"as_of": as_of, "close": close, "live": live, "halted": halted}
     done = {leg: info["status"] in ACTIVE_LEG_STATUSES for leg, info in legs.items()}
     entry_done, stop_done = done.get("entry", False), done.get("stop", False)
     tp1_done, tp2_done, trailing_done = done.get("tp1", False), done.get("tp2", False), done.get("trailing", False)
 
     if stop_done or trailing_done:
-        return {"phase": "closed", "next_leg": None, "triggered": False, "reason": "청산 완료", "as_of": bar["date"], "close": close, "order_side": None, "order_quantity": None}
+        return {**base, "phase": "closed", "next_leg": None, "triggered": False, "reason": "청산 완료", "order_side": None, "order_quantity": None}
 
     if not entry_done:
-        hit = bar["high"] >= plan["entry_price"] if long else bar["low"] <= plan["entry_price"]
-        reason = "일봉이 오래되었습니다" if stale else ("진입가 돌파 → 진입 주문 대상" if hit else f"진입가 대기 중 (진입가 {plan['entry_price']:g}, 현재가 {close:g})")
-        return {"phase": "waiting_entry", "next_leg": "entry", "triggered": hit, "reason": reason, "as_of": bar["date"], "close": close, "order_side": plan["side"], "order_quantity": quantity}
+        hit = hit_up(plan["entry_price"]) if long else hit_down(plan["entry_price"])
+        reason = "일봉이 오래되었습니다" if stale else "거래정지 종목입니다" if halted else ("진입가 돌파 → 진입 주문 대상" if hit else f"진입가 대기 중 (진입가 {plan['entry_price']:g}, 현재가 {close:g})")
+        return {**base, "phase": "waiting_entry", "next_leg": "entry", "triggered": hit, "reason": reason, "order_side": plan["side"], "order_quantity": float(plan["quantity"])}
 
-    tp1_qty, tp2_qty, trailing_qty = _leg_quantities(quantity, plan["tp1_ratio"], plan["tp2_ratio"])
-    # 정수 배분으로 수량이 0이 된 익절 레그는 0주 주문이 되므로 주문 대상에서 건너뛴다(다음 레그로 진행).
+    position = _position(plan, legs)
+    tp1_qty, tp2_qty, remaining_qty = position["tp1"], position["tp2"], position["remaining"]
     tp1_pending, tp2_pending = not tp1_done and tp1_qty > 0, not tp2_done and tp2_qty > 0
-    remaining_qty = quantity - (tp1_qty if tp1_done else 0.0) - (tp2_qty if tp2_done else 0.0)
     if remaining_qty <= 0:
-        return {"phase": "closed", "next_leg": None, "triggered": False, "reason": "청산 완료 — 남은 배정 수량 없음", "as_of": bar["date"], "close": close, "order_side": None, "order_quantity": None}
+        reason = "진입 미체결 — 청산 대상 없음" if position["entry"] <= 0 else "청산 완료 — 남은 수량 없음"
+        return {**base, "phase": "closed", "next_leg": None, "triggered": False, "reason": reason, "order_side": None, "order_quantity": None}
     phase = "holding" if tp1_pending else "tp1_done" if tp2_pending else "trailing"
 
-    stop_hit = bar["low"] <= plan["stop_price"] if long else bar["high"] >= plan["stop_price"]
-    if stop_hit:
+    if breached(plan["stop_price"]):
         reason = "일봉이 오래되었습니다" if stale else "손절가 이탈 → 즉시 청산"
-        return {"phase": phase, "next_leg": "stop", "triggered": True, "reason": reason, "as_of": bar["date"], "close": close, "order_side": exit_side, "order_quantity": remaining_qty}
+        return {**base, "phase": phase, "next_leg": "stop", "triggered": True, "reason": reason, "order_side": exit_side, "order_quantity": remaining_qty}
 
     if tp1_pending:
-        hit = bar["high"] >= plan["tp1_price"] if long else bar["low"] <= plan["tp1_price"]
+        hit = hit_up(plan["tp1_price"]) if long else hit_down(plan["tp1_price"])
         reason = "일봉이 오래되었습니다" if stale else ("1차 목표가 도달 → 1차 익절" if hit else f"1차 목표가 대기 중 ({plan['tp1_price']:g})")
-        return {"phase": "holding", "next_leg": "tp1", "triggered": hit, "reason": reason, "as_of": bar["date"], "close": close, "order_side": exit_side, "order_quantity": tp1_qty}
+        return {**base, "phase": "holding", "next_leg": "tp1", "triggered": hit, "reason": reason, "order_side": exit_side, "order_quantity": min(tp1_qty, remaining_qty)}
 
     if tp2_pending:
-        hit = bar["high"] >= plan["tp2_price"] if long else bar["low"] <= plan["tp2_price"]
+        hit = hit_up(plan["tp2_price"]) if long else hit_down(plan["tp2_price"])
         reason = "일봉이 오래되었습니다" if stale else ("2차 목표가 도달 → 2차 익절" if hit else f"2차 목표가 대기 중 ({plan['tp2_price']:g})")
-        return {"phase": "tp1_done", "next_leg": "tp2", "triggered": hit, "reason": reason, "as_of": bar["date"], "close": close, "order_side": exit_side, "order_quantity": tp2_qty}
+        return {**base, "phase": "tp1_done", "next_leg": "tp2", "triggered": hit, "reason": reason, "order_side": exit_side, "order_quantity": min(tp2_qty, remaining_qty)}
 
     since_date = str((legs["tp2"] if tp2_done else legs["tp1"] if tp1_done else legs["entry"])["as_of"])
     reference = _trailing_reference(db, ticker, plan["side"], since_date)
+    if live:  # 장중 신고가는 아직 일봉에 없다 — 실시간 세션 극값을 함께 본다.
+        reference = session_high if reference is None else max(reference, session_high)
+        if not long: reference = session_low if reference is None else min(reference, session_low)
     if reference is None:
-        return {"phase": "trailing", "next_leg": "trailing", "triggered": False, "reason": "트레일링 기준 데이터 없음", "as_of": bar["date"], "close": close, "order_side": exit_side, "order_quantity": trailing_qty}
+        return {**base, "phase": "trailing", "next_leg": "trailing", "triggered": False, "reason": "트레일링 기준 데이터 없음", "order_side": exit_side, "order_quantity": remaining_qty}
     trail_level = reference * (1 - plan["tp3_trailing_pct"] / 100) if long else reference * (1 + plan["tp3_trailing_pct"] / 100)
-    hit = bar["low"] <= trail_level if long else bar["high"] >= trail_level
+    hit = breached(trail_level)
     reason = "일봉이 오래되었습니다" if stale else (f"트레일링 스탑 이탈({trail_level:g}) → 전량 청산" if hit else f"트레일링 스탑 감시 중 (기준 {reference:g}, 이탈가 {trail_level:g})")
-    return {"phase": "trailing", "next_leg": "trailing", "triggered": hit, "reason": reason, "as_of": bar["date"], "close": close, "order_side": exit_side, "order_quantity": trailing_qty}
+    return {**base, "phase": "trailing", "next_leg": "trailing", "triggered": hit, "reason": reason, "order_side": exit_side, "order_quantity": remaining_qty}
 
 
-def evaluate_plans(plan_ids: list[int] | None = None, path=None) -> list[dict[str, Any]]:
+def evaluate_plans(plan_ids: list[int] | None = None, path=None, env: str | None = None, quotes: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """계획별 현재 단계와 다음 동작. quotes에 종목별 실시간 시세를 주면 일봉 대신 그 값으로 판정한다."""
     wanted = {int(value) for value in plan_ids} if plan_ids else None
     with db_session(path) as db:
         plans = [_plan(row) for row in db.execute("SELECT * FROM trade_plans ORDER BY name").fetchall() if wanted is None or row["id"] in wanted]
-        latest_date = db.execute("SELECT MAX(date) FROM daily_bars WHERE source='krx_snapshot'").fetchone()[0]
-        legs_by_plan = _plan_legs(db, [plan["id"] for plan in plans])
+        latest_date = db.execute(f"SELECT MAX(date) FROM daily_bars WHERE source='{bar_source()}'").fetchone()[0]
+        legs_by_plan = _plan_legs(db, [plan["id"] for plan in plans], env)
         output = []
         for plan in plans:
-            evaluation = _plan_evaluation(db, plan, legs_by_plan.get(plan["id"], {}), latest_date)
+            evaluation = _plan_evaluation(db, plan, legs_by_plan.get(plan["id"], {}), latest_date, (quotes or {}).get(plan["ticker"]))
             if evaluation["triggered"] and not plan["enabled"]:
                 evaluation = {**evaluation, "triggered": False, "reason": "비활성 계획"}
-            output.append({"plan_id": plan["id"], "name": plan["name"], "ticker": plan["ticker"], "side": plan["side"], **evaluation})
+            output.append({"plan_id": plan["id"], "name": plan["name"], "ticker": plan["ticker"], "side": plan["side"], "setup": plan["setup"], **evaluation})
         return output
 
 
@@ -230,11 +280,10 @@ def plan_exposure(path=None) -> list[dict[str, Any]]:
         for plan in plans:
             legs = legs_by_plan.get(plan["id"], {})
             done = {leg: info["status"] in ACTIVE_LEG_STATUSES for leg, info in legs.items()}
-            quantity = float(plan["quantity"])
-            tp1_qty, tp2_qty, _ = _leg_quantities(quantity, plan["tp1_ratio"], plan["tp2_ratio"])
+            position = _position(plan, legs)
             entered = done.get("entry", False)
             closed = done.get("stop", False) or done.get("trailing", False)
-            remaining = 0.0 if closed or not entered else quantity - (tp1_qty if done.get("tp1") else 0.0) - (tp2_qty if done.get("tp2") else 0.0)
+            remaining = 0.0 if closed or not entered else position["remaining"]
             phase = "closed" if closed or (entered and remaining <= 0) else "waiting_entry" if not entered else "trailing" if done.get("tp2") else "tp1_done" if done.get("tp1") else "holding"
             bar = _latest_bar(db, plan["ticker"])
             entry_leg = legs.get("entry", {})
@@ -247,16 +296,19 @@ def plan_exposure(path=None) -> list[dict[str, Any]]:
     return output
 
 
-def run_plans(broker=None, dry_run: bool = True, plan_ids: list[int] | None = None, path=None) -> list[dict[str, Any]]:
+def run_plans(broker=None, dry_run: bool = True, plan_ids: list[int] | None = None, path=None,
+              quotes: dict[str, dict[str, Any]] | None = None, origin: str = "manual") -> list[dict[str, Any]]:
+    """조건을 충족한 계획을 한 레그씩 집행한다. quotes를 주면 실시간 시세로 판정한다."""
     if not dry_run and broker is None: raise ValueError("브로커가 설정되지 않았습니다")
     env = str(getattr(broker, "env", "") or "")
-    evaluations = {item["plan_id"]: item for item in evaluate_plans(plan_ids, path)}
+    evaluations = {item["plan_id"]: item for item in evaluate_plans(plan_ids, path, env=env or None, quotes=quotes)}
     plans = {plan["id"]: plan for plan in list_plans(path)}
     holdings = {row["ticker"]: float(row["quantity"]) for row in snapshot(path)["positions"]}
+    limits, used, verified = guard.settings(path), guard.usage(env or None, path), guard.verified_plans(path)
     now = _now()
     recorded: list[dict[str, Any]] = []
     with db_session(path) as db:
-        latest = db.execute("SELECT MAX(date) FROM daily_bars WHERE source='krx_snapshot'").fetchone()[0]
+        latest = db.execute(f"SELECT MAX(date) FROM daily_bars WHERE source='{bar_source()}'").fetchone()[0]
         reserved = {row[0]: float(row[1] or 0) for row in db.execute(f"SELECT ticker, SUM(quantity - filled_quantity) FROM broker_orders WHERE side='sell' AND status IN ({','.join('?' * len(OPEN_STATUSES))}) GROUP BY ticker", OPEN_STATUSES).fetchall()}
         for plan_id, evaluation in evaluations.items():
             plan = plans.get(plan_id)
@@ -266,32 +318,62 @@ def run_plans(broker=None, dry_run: bool = True, plan_ids: list[int] | None = No
             quantity = float(evaluation["order_quantity"])
             order_type = plan["order_type"] if leg == "entry" else "market"
             limit_price = plan["limit_price"] if leg == "entry" else None
-            order = {"status": "dry_run" if dry_run else "submitted", "broker_order_id": None, "message": "모의 실행 — 저장되지 않는 미리보기입니다" if dry_run else "", "payload": None}
+            trigger_price = evaluation.get("close")
+            notional = quantity * float(limit_price or trigger_price or 0)
+            allowed, blocked_reason = guard.check(leg, env or "paper", plan_id, notional, path, limits, used, verified)
+            order = {"status": "dry_run" if dry_run else "submitted", "broker_order_id": None, "org_no": None, "message": "모의 실행 — 저장되지 않는 미리보기입니다" if dry_run else "", "payload": None}
             available = holdings.get(plan["ticker"], 0.0) - reserved.get(plan["ticker"], 0.0)
-            if leg != "entry" and order_side == "sell" and quantity > available + 1e-9:
-                order = {"status": "skipped", "broker_order_id": None, "message": f"보유 수량 부족: 주문 가능 {available:g}, 요청 {quantity:g}", "payload": None}
-            elif evaluation["as_of"] != latest:
-                order = {"status": "skipped", "broker_order_id": None, "message": f"일봉이 오래되었습니다: 종목 {evaluation['as_of']}, 최신 {latest}", "payload": None}
-            elif not dry_run:
-                try:
-                    result = broker.submit_order(plan["ticker"], order_side, quantity, order_type, limit_price)
-                    order = {"status": result.status, "broker_order_id": result.broker_order_id, "message": result.message, "payload": json.dumps(result.payload, ensure_ascii=False, default=str)}
-                except Exception as exc:
-                    order = {"status": "failed", "broker_order_id": None, "message": f"{type(exc).__name__}: {exc}", "payload": None}
+            shortfall = leg != "entry" and order_side == "sell" and quantity > available + 1e-9
+            if not allowed:
+                order = {"status": "skipped", "broker_order_id": None, "org_no": None, "message": f"안전장치 차단 — {blocked_reason}", "payload": None}
+            elif shortfall and available <= 0:
+                order = {"status": "skipped", "broker_order_id": None, "org_no": None, "message": f"보유 수량 없음: 주문 가능 {available:g}, 요청 {quantity:g}", "payload": None}
+            elif evaluation.get("halted"):
+                order = {"status": "skipped", "broker_order_id": None, "org_no": None, "message": "거래정지 종목입니다", "payload": None}
+            elif not evaluation.get("live") and evaluation["as_of"] != latest:
+                order = {"status": "skipped", "broker_order_id": None, "org_no": None, "message": f"일봉이 오래되었습니다: 종목 {evaluation['as_of']}, 최신 {latest}", "payload": None}
+            else:
+                if shortfall:
+                    # 청산은 통째로 거르지 않고 실제 보유만큼이라도 내보낸다. 손절을 "보유 부족"으로
+                    # 스킵하는 쪽이 훨씬 위험하다. 어긋난 수량은 reconcile로 맞춘다.
+                    order["message"] = f"보유 수량에 맞춰 {quantity:g}주 → {available:g}주로 줄여 주문합니다"
+                    quantity = available
+                if not dry_run:
+                    try:
+                        result = broker.submit_order(plan["ticker"], order_side, quantity, order_type, limit_price)
+                        order = {"status": result.status, "broker_order_id": result.broker_order_id, "org_no": result.org_no,
+                                 "message": " · ".join(filter(None, (order["message"], result.message))), "payload": json.dumps(result.payload, ensure_ascii=False, default=str)}
+                    except Exception as exc:
+                        order = {"status": "failed", "broker_order_id": None, "org_no": None, "message": f"{type(exc).__name__}: {exc}", "payload": None}
+            if leg == "entry" and order["status"] in ("dry_run", "submitted", "partial", "filled"):
+                used = {**used, "entries": used["entries"] + 1, "notional_krw": used["notional_krw"] + notional}
+            row = {"plan_id": plan["id"], "plan_name": plan["name"], "leg": leg, "as_of": evaluation["as_of"], "ticker": plan["ticker"], "side": order_side,
+                   "quantity": quantity, "order_type": order_type, "limit_price": limit_price, "status": order["status"], "env": env,
+                   "broker_order_id": order["broker_order_id"], "org_no": order["org_no"], "origin": origin, "trigger_price": trigger_price,
+                   "message": order["message"], "payload": order["payload"]}
             if dry_run:
-                recorded.append({"id": None, "plan_id": plan["id"], "plan_name": plan["name"], "leg": leg, "as_of": evaluation["as_of"], "ticker": plan["ticker"], "side": order_side, "quantity": quantity, "order_type": order_type, "limit_price": limit_price, "status": order["status"], "env": env, "broker_order_id": None, "filled_quantity": 0.0, "filled_price": None, "fee": 0.0, "tax": 0.0, "trade_id": None, "message": order["message"], "payload": order["payload"], "requested_at": now, "updated_at": now})
+                recorded.append({"id": None, **row, "filled_quantity": 0.0, "filled_price": None, "fee": 0.0, "tax": 0.0, "trade_id": None, "replaces_order_id": None, "requested_at": now, "updated_at": now})
                 continue
             if order_side == "sell" and order["status"] in OPEN_STATUSES: reserved[plan["ticker"]] = reserved.get(plan["ticker"], 0.0) + quantity
-            try:
-                cursor = db.execute(
-                    "INSERT INTO broker_orders(plan_id,leg,as_of,ticker,side,quantity,order_type,limit_price,status,env,broker_order_id,message,payload,requested_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (plan["id"], leg, evaluation["as_of"], plan["ticker"], order_side, quantity, order_type, limit_price, order["status"], env, order["broker_order_id"], order["message"], order["payload"], now, now))
-            except sqlite3.IntegrityError:
-                cursor = db.execute(
-                    "INSERT INTO broker_orders(plan_id,leg,as_of,ticker,side,quantity,order_type,limit_price,status,env,broker_order_id,message,payload,requested_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?)",
-                    (plan["id"], leg, evaluation["as_of"], plan["ticker"], order_side, quantity, order_type, limit_price, "failed", env, f"중복 주문번호 {order['broker_order_id']} — 주문 기록만 남깁니다", order["payload"], now, now))
-            recorded.append(_order(db, int(cursor.lastrowid)))
+            recorded.append(_insert_order(db, row, now))
     return recorded
+
+
+def _insert_order(db, row: dict[str, Any], now: str) -> dict[str, Any]:
+    """주문 1건을 기록한다. 같은 브로커 주문번호가 이미 있으면(재전송·중복 응답) 기록만 남기고 넘어간다."""
+    columns = "plan_id,leg,as_of,ticker,side,quantity,order_type,limit_price,status,env,broker_order_id,org_no,origin,trigger_price,replaces_order_id,message,payload,requested_at,updated_at"
+    values = (row["plan_id"], row["leg"], row["as_of"], row["ticker"], row["side"], row["quantity"], row["order_type"], row["limit_price"],
+              row["status"], row["env"], row["broker_order_id"], row["org_no"], row.get("origin", "manual"), row.get("trigger_price"),
+              row.get("replaces_order_id"), row["message"], row["payload"], now, now)
+    statement = f"INSERT INTO broker_orders({columns}) VALUES({','.join('?' * len(values))})"
+    try:
+        cursor = db.execute(statement, values)
+    except sqlite3.IntegrityError:
+        fallback = list(values)
+        fallback[8], fallback[10] = "failed", None  # status, broker_order_id
+        fallback[15] = f"중복 주문번호 {row['broker_order_id']} — 주문 기록만 남깁니다"
+        cursor = db.execute(statement, fallback)
+    return _order(db, int(cursor.lastrowid))
 
 
 def simulate_plan(plan_id: int, start: str, end: str, path=None) -> dict[str, Any]:
@@ -313,7 +395,7 @@ def simulate_plan(plan_id: int, start: str, end: str, path=None) -> dict[str, An
         if row is None: raise ValueError("계획을 찾을 수 없습니다")
         plan = _plan(row)
         bars = [dict(r) for r in db.execute(
-            "SELECT date,high,low,close FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=? AND date<=? ORDER BY date",
+            f"SELECT date,high,low,close FROM daily_bars WHERE ticker=? AND source='{bar_source()}' AND date>=? AND date<=? ORDER BY date",
             (plan["ticker"], start, end)).fetchall()]
 
     long = plan["side"] == "buy"
@@ -420,6 +502,67 @@ def record_fill(order_id: int, path=None) -> int | None:
         return _record_fill(db, int(order_id))
 
 
+def _apply_fill(db, order_id: int, fill: Any) -> None:
+    db.execute("UPDATE broker_orders SET status=?,filled_quantity=?,filled_price=?,fee=?,tax=?,payload=?,updated_at=? WHERE id=?",
+               (fill.status, float(fill.quantity), float(fill.price) or None, float(fill.fee), float(fill.tax),
+                json.dumps(fill.payload, ensure_ascii=False, default=str), _now(), order_id))
+    if fill.status == "filled": _record_fill(db, order_id)
+
+
+def manage_open_orders(broker=None, path=None, timeout_sec: float = 60.0, cancel_entries: bool = False) -> list[dict[str, Any]]:
+    """접수된 채 체결되지 않고 있는 주문을 정리한다.
+
+    진입은 **취소**한다 — 지정가가 안 붙었다는 건 가격이 이미 떠났다는 뜻이고, 계획에 없던 자리를
+    추격 매수하지 않기 위해서다. 청산은 **시장가로 정정**한다 — 손절·익절은 값을 깎아서라도 반드시
+    나가야 한다. 정정하면 KIS가 새 주문번호를 주므로 원주문은 닫고 새 주문 행을 남긴다."""
+    if broker is None: raise ValueError("브로커가 설정되지 않았습니다")
+    cutoff = (datetime.now() - timedelta(seconds=max(0.0, timeout_sec))).isoformat(timespec="seconds")
+    with db_session(path) as db:
+        pending = [dict(row) for row in db.execute(
+            f"SELECT * FROM broker_orders WHERE status IN ({','.join('?' * len(OPEN_STATUSES))}) AND broker_order_id IS NOT NULL AND org_no IS NOT NULL AND requested_at <= ? ORDER BY id",
+            (*OPEN_STATUSES, cutoff)).fetchall()]
+    handled: list[dict[str, Any]] = []
+    for order in pending:
+        is_entry = order["leg"] == "entry"
+        if is_entry and not cancel_entries and order["order_type"] == "market": continue
+        remaining = float(order["quantity"]) - float(order["filled_quantity"] or 0)
+        if remaining <= 0: continue
+        action = "cancel" if is_entry else "revise"
+        try:
+            if action == "cancel":
+                result = broker.cancel_order(order["org_no"], order["broker_order_id"], remaining)
+            else:
+                result = broker.revise_order(order["org_no"], order["broker_order_id"], remaining, "market", None)
+            fill = broker.order_fill(order["broker_order_id"])
+        except Exception as exc:
+            with db_session(path) as db:
+                db.execute("UPDATE broker_orders SET message=?,updated_at=? WHERE id=?", (f"{action} 실패 — {type(exc).__name__}: {exc}", _now(), order["id"]))
+                handled.append(_order(db, order["id"]))
+            continue
+        with db_session(path) as db:
+            if fill is not None: _apply_fill(db, order["id"], fill)
+            if result.status == "rejected":
+                db.execute("UPDATE broker_orders SET message=?,updated_at=? WHERE id=?", (f"{action} 거부 — {result.message}", _now(), order["id"]))
+                handled.append(_order(db, order["id"]))
+                continue
+            note = "미체결 취소" if action == "cancel" else f"미체결 {remaining:g}주 시장가 정정"
+            db.execute("UPDATE broker_orders SET status='cancelled',message=?,updated_at=? WHERE id=?", (f"{note} — {result.message}", _now(), order["id"]))
+            handled.append(_order(db, order["id"]))
+            if action == "revise":
+                handled.append(_insert_order(db, {
+                    "plan_id": order["plan_id"], "leg": order["leg"], "as_of": order["as_of"], "ticker": order["ticker"], "side": order["side"],
+                    "quantity": remaining, "order_type": "market", "limit_price": None, "status": result.status, "env": order["env"],
+                    "broker_order_id": result.broker_order_id, "org_no": result.org_no, "origin": order["origin"], "trigger_price": order["trigger_price"],
+                    "replaces_order_id": order["id"], "message": f"미체결 정정 재주문 — {result.message}",
+                    "payload": json.dumps(result.payload, ensure_ascii=False, default=str)}, _now()))
+    return handled
+
+
+def cancel_all_open_orders(broker=None, path=None) -> list[dict[str, Any]]:
+    """지금 시장에 걸려 있는 우리 주문을 전부 취소한다(`mscr trade panic`)."""
+    return manage_open_orders(broker, path, timeout_sec=0.0, cancel_entries=True)
+
+
 def sync_orders(broker=None, path=None) -> list[dict[str, Any]]:
     if broker is None: raise ValueError("브로커가 설정되지 않았습니다")
     with db_session(path) as db:
@@ -437,8 +580,7 @@ def sync_orders(broker=None, path=None) -> list[dict[str, Any]]:
             if fill is None:
                 db.execute("UPDATE broker_orders SET message=?,updated_at=? WHERE id=?", (error, now, order_id))
             else:
-                db.execute("UPDATE broker_orders SET status=?,filled_quantity=?,filled_price=?,fee=?,tax=?,payload=?,updated_at=? WHERE id=?", (fill.status, float(fill.quantity), float(fill.price) or None, float(fill.fee), float(fill.tax), json.dumps(fill.payload, ensure_ascii=False, default=str), now, order_id))
-                if fill.status == "filled": _record_fill(db, order_id)
+                _apply_fill(db, order_id, fill)
             updated.append(_order(db, order_id))
     return updated
 

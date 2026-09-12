@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any, Callable, Iterable
 
 from .db import db_session
+from .market import active as active_market
+from .market import bar_source
 from .dynamic import evaluate_context, screen_context
 
 JOB_NAME = "signals"
@@ -14,9 +16,16 @@ STREAK_LOOKBACK = 60
 def start_job(screen_ids: list[int] | None = None, days: int = 1, force: bool = False) -> dict[str, Any]:
     """신호 로그 적재를 백그라운드로 돌린다. 날짜마다 전 유니버스를 다시 계산하므로 요청 스레드에서
     직접 돌리면 응답이 막힌다."""
-    from . import jobs
+    from . import jobs, market
 
-    return jobs.start(JOB_NAME, lambda progress: capture(screen_ids=screen_ids, offsets=range(days), force=force, on_progress=progress), {"days": days, "force": force})
+    requested_market = market.inherit()
+
+    def _target(progress):
+        # 작업 스레드에는 요청 컨텍스트가 없다. 시작한 쪽의 시장 모드를 그대로 이어 쓴다.
+        with market.use(requested_market):
+            return capture(screen_ids=screen_ids, offsets=range(days), force=force, on_progress=progress)
+
+    return jobs.start(JOB_NAME, _target, {"days": days, "force": force, "market": requested_market})
 
 
 def _now() -> str:
@@ -25,11 +34,11 @@ def _now() -> str:
 
 def trading_days(path=None) -> list[str]:
     with db_session(path) as db:
-        return [row[0] for row in db.execute("SELECT DISTINCT date FROM daily_bars WHERE source='krx_snapshot' ORDER BY date").fetchall()]
+        return [row[0] for row in db.execute(f"SELECT DISTINCT date FROM daily_bars WHERE source='{bar_source()}' ORDER BY date").fetchall()]
 
 
 def _screen_rows(db, screen_ids: list[int] | None) -> list[dict[str, Any]]:
-    rows = db.execute("SELECT id,name,spec FROM screens ORDER BY name").fetchall()
+    rows = db.execute("SELECT id,name,spec FROM screens WHERE region=? ORDER BY name", (active_market().region,)).fetchall()
     wanted = {int(value) for value in screen_ids} if screen_ids else None
     return [{"id": row["id"], "name": row["name"], "spec": json.loads(row["spec"])} for row in rows if wanted is None or row["id"] in wanted]
 
@@ -87,7 +96,8 @@ def coverage(path=None) -> list[dict[str, Any]]:
             SELECT s.id, s.name, COUNT(r.date) days, MIN(r.date) first_date, MAX(r.date) last_date,
                    COALESCE(SUM(r.matched), 0) signals
             FROM screens s LEFT JOIN screen_runs r ON r.screen_id = s.id
-            GROUP BY s.id, s.name ORDER BY s.name""").fetchall()
+            WHERE s.region = ?
+            GROUP BY s.id, s.name ORDER BY s.name""", (active_market().region,)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -150,6 +160,6 @@ def signal_history(ticker: str, limit: int = 50, path=None) -> list[dict[str, An
     """한 종목이 어떤 프리셋에 언제 걸렸는지. 계획의 셋업 태그를 채울 때 쓴다."""
     with db_session(path) as db:
         rows = db.execute(
-            "SELECT g.date, g.screen_id, s.name, g.rank FROM screen_signals g JOIN screens s ON s.id=g.screen_id WHERE g.ticker=? ORDER BY g.date DESC, s.name LIMIT ?",
-            (str(ticker), max(1, min(int(limit), 500)))).fetchall()
+            "SELECT g.date, g.screen_id, s.name, g.rank FROM screen_signals g JOIN screens s ON s.id=g.screen_id WHERE g.ticker=? AND s.region=? ORDER BY g.date DESC, s.name LIMIT ?",
+            (str(ticker), active_market().region, max(1, min(int(limit), 500)))).fetchall()
     return [dict(row) for row in rows]

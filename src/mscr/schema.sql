@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS instruments (
   ticker TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   kind TEXT NOT NULL,
+  region TEXT NOT NULL DEFAULT 'KR',
   market TEXT,
   category TEXT,
   base_index TEXT,
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS instruments (
   last_seen TEXT NOT NULL,
   delisted INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_instruments_region ON instruments(region, kind);
 
 CREATE TABLE IF NOT EXISTS daily_bars (
   ticker TEXT NOT NULL,
@@ -60,9 +62,12 @@ CREATE TABLE IF NOT EXISTS indicator_definitions (
   updated_at TEXT NOT NULL
 );
 
+-- 프리셋·관심목록은 시장 모드별로 나눠 보여준다. 이름은 시장을 가로질러 유일해야 한다
+-- (이미 만들어진 DB의 UNIQUE(name) 제약을 그대로 두고, 저장 시 다른 시장과의 충돌을 막는다).
 CREATE TABLE IF NOT EXISTS screens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
+  region TEXT NOT NULL DEFAULT 'KR',
   spec TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -90,6 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_screen_signals_ticker ON screen_signals(ticker, d
 CREATE TABLE IF NOT EXISTS watchlists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
+  region TEXT NOT NULL DEFAULT 'KR',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -177,6 +183,10 @@ CREATE TABLE IF NOT EXISTS broker_orders (
   fee REAL NOT NULL DEFAULT 0,
   tax REAL NOT NULL DEFAULT 0,
   trade_id INTEGER REFERENCES trades(id) ON DELETE SET NULL,
+  org_no TEXT,
+  origin TEXT NOT NULL DEFAULT 'manual',
+  trigger_price REAL,
+  replaces_order_id INTEGER REFERENCES broker_orders(id) ON DELETE SET NULL,
   message TEXT,
   payload TEXT,
   requested_at TEXT NOT NULL,
@@ -184,3 +194,25 @@ CREATE TABLE IF NOT EXISTS broker_orders (
 );
 CREATE INDEX IF NOT EXISTS idx_broker_orders_plan ON broker_orders(plan_id, requested_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_broker_orders_daily ON broker_orders(env, broker_order_id, substr(requested_at, 1, 10)) WHERE broker_order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_broker_orders_day ON broker_orders(substr(requested_at, 1, 10), env, status);
+
+-- 실시간 실행 데몬의 단일 상태 행. 프로세스가 죽어도 마지막 하트비트가 남아 감시 공백을 드러낸다.
+CREATE TABLE IF NOT EXISTS daemon_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  status TEXT NOT NULL,
+  env TEXT,
+  pid INTEGER,
+  mode TEXT,
+  stream TEXT,
+  plans INTEGER NOT NULL DEFAULT 0,
+  tickers INTEGER NOT NULL DEFAULT 0,
+  ticks INTEGER NOT NULL DEFAULT 0,
+  orders INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  heartbeat_at TEXT,
+  stopped_at TEXT,
+  last_tick_at TEXT,
+  last_error TEXT,
+  message TEXT,
+  updated_at TEXT NOT NULL
+);

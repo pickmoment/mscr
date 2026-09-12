@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .db import db_session
+from .market import bar_source
 from .trading import plan_exposure
 
 FILL_STATUSES = ("filled", "partial")
@@ -48,7 +49,7 @@ def _slippage_pct(planned: float | None, actual: float | None, worse_when_higher
 
 def _excursion(db, ticker: str, start: str, end: str | None) -> dict[str, Any]:
     row = db.execute(
-        "SELECT MIN(low) lo, MAX(high) hi, COUNT(*) bars FROM daily_bars WHERE ticker=? AND source='krx_snapshot' AND date>=? AND date<=?",
+        f"SELECT MIN(low) lo, MAX(high) hi, COUNT(*) bars FROM daily_bars WHERE ticker=? AND source='{bar_source()}' AND date>=? AND date<=?",
         (ticker, start, end or FAR_FUTURE),
     ).fetchone()
     return {"low": row["lo"], "high": row["hi"], "bars": int(row["bars"] or 0)}

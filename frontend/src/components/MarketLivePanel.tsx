@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import { api, LiveFeaturedRow, LiveFeaturedSection, LiveIndustryRow, LiveIssueRow, LiveMarketStat, LiveNewsRow, LiveThemeRow, LiveThemeStock, LiveTrendingRow, MarketLiveOverview } from '../lib/api';
-import { compactVolume, won } from '../lib/format';
+import { compactVolume, money } from '../lib/format';
 import { SelectTicker } from '../lib/nav';
 import ViewHeader from './ViewHeader';
 
@@ -108,7 +108,7 @@ function FeaturedTable({ factor, section, onSelect, valueLabel, valueOf }: { fac
         <tbody>
           {section.rows.map(row => <tr key={`${factor}-${row.code}`} onClick={() => onSelect(row.code, tickers)}>
             <td>{row.name}<span className="subtle mono"> {row.code}</span></td>
-            <td className="num">{won(row.close)}</td>
+            <td className="num">{money(row.close)}</td>
             <td className={`num ${changeClass(row.returns)}`}>{fmtPct2(row.returns)}</td>
             <td className="num">{valueOf(row)}</td>
           </tr>)}

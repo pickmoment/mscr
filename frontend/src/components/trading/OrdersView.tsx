@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api, BrokerOrder, ReconcileResult } from '../../lib/api';
-import { won } from '../../lib/format';
+import { money } from '../../lib/format';
 import ViewHeader from '../ViewHeader';
 import Term from '../Term';
 import { useTrading } from './TradingContext';
@@ -77,7 +77,7 @@ export default function OrdersView() {
       {reconcileResult && <div className="stack">
         <div className="toolbar toolbar--tight">
           <span className="badge" data-tone={reconcileResult.mismatched ? 'danger' : 'ok'}>{reconcileResult.env === 'real' ? '실전' : '모의'} {reconcileResult.account_masked} · {reconcileResult.mismatched ? `불일치 ${reconcileResult.mismatched}건` : '일치'}</span>
-          <span className="subtle">현금 — 로컬 {won(reconcileResult.local_cash_krw)} / 브로커 {won(reconcileResult.broker_cash_krw)}(사용자 입력값이라 다를 수 있습니다)</span>
+          <span className="subtle">현금 — 로컬 {money(reconcileResult.local_cash_krw)} / 브로커 {money(reconcileResult.broker_cash_krw)}(사용자 입력값이라 다를 수 있습니다)</span>
         </div>
         {!!reconcileResult.positions.length && <table className="table table--nowrap table--rows">
           <thead><tr><th>종목</th><th className="num">로컬 수량</th><th className="num">브로커 수량</th><th className="num">차이</th></tr></thead>
@@ -105,7 +105,7 @@ export default function OrdersView() {
             <td className="num">{num(order.quantity)}</td>
             <td><span className="badge" data-tone={statusTone[order.status]}>{statusLabel[order.status] || order.status}</span></td>
             <td className="num">{num(order.filled_quantity)}</td>
-            <td className="num">{won(order.filled_price)}</td>
+            <td className="num">{money(order.filled_price)}</td>
             <td className="mono">{order.broker_order_id || '—'}</td>
             <td className="subtle">{order.message || ''}</td>
           </tr>)}</tbody>

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -11,38 +13,93 @@ from .config import DB_PATH, MSCR_HOME, SCHEMA_VERSION, request_delay, request_d
 from .credentials import load as load_settings
 from .credentials import save as save_settings
 from .db import db_session, init_db
+from . import market as market_mode
+from .market import bar_source
 from .providers.krx import clear_krx_credentials, krx_status, save_krx_credentials
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
+MARKET_HELP = "시장 모드: kr(한국) 또는 us(미국). 생략하면 저장된 기본값(`mscr config market`)을 씁니다."
+
+
+class _SkipTrading(Exception):
+    """계획·주문 요약을 건너뛴다는 신호. 실제 오류와 섞이지 않게 따로 둔다."""
+
+
+def _require_trading() -> None:
+    """계획·주문·리스크·복기는 국내 전용이다. 기본 모드가 미국이어도 조용히 한국 데이터를 읽지 않고 막는다."""
+    mkt = market_mode.active()
+    if mkt.trading:
+        return
+    typer.echo(f"{mkt.label} 주식 모드에서는 지원하지 않는 명령입니다. `mscr --market kr …`로 실행하거나 `mscr config market kr`로 기본 모드를 바꾸세요.", err=True)
+    raise typer.Exit(code=1)
+
+
+def _use_market(key: str | None) -> None:
+    if not key:
+        return
+    try:
+        market_mode.set_active(key)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@app.callback()
+def main(market: str = typer.Option(None, "--market", "-m", help=MARKET_HELP)) -> None:
+    """로컬 주식 스크리너·포트폴리오 도구. 시장 모드는 하위 명령 전체에 적용됩니다."""
+    _use_market(market)
+
 
 @app.command()
-def doctor() -> None:
+def doctor(market: str = typer.Option(None, "--market", "-m", help=MARKET_HELP)) -> None:
     """Show local database and ingestion health."""
+    _use_market(market)
     init_db()
+    mkt = market_mode.active()
     with db_session() as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        as_of = db.execute("SELECT MAX(date) FROM daily_bars WHERE source='krx_snapshot'").fetchone()[0]
-        counts = db.execute("SELECT kind, COUNT(*) AS n FROM instruments GROUP BY kind").fetchall()
-        bars = db.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0]
+        as_of = db.execute(f"SELECT MAX(date) FROM daily_bars WHERE source='{bar_source()}'").fetchone()[0]
+        counts = db.execute("SELECT kind, COUNT(*) AS n FROM instruments WHERE region=? GROUP BY kind", (mkt.region,)).fetchall()
+        bars = db.execute("SELECT COUNT(*) FROM daily_bars WHERE source=?", (mkt.bar_source,)).fetchone()[0]
         indicators = db.execute("SELECT COUNT(*) FROM indicator_definitions WHERE enabled=1").fetchone()[0]
-        failures = db.execute("SELECT date, kind, error FROM ingest_runs WHERE status='failed' ORDER BY date DESC LIMIT 10").fetchall()
+        failures = db.execute(
+            f"SELECT date, kind, error FROM ingest_runs WHERE status='failed' AND kind IN ({','.join('?' * len(mkt.ingest_kinds))}) ORDER BY date DESC LIMIT 10",
+            mkt.ingest_kinds).fetchall()
     count_map = {row["kind"]: row["n"] for row in counts}
+    typer.echo(f"market: {mkt.key} ({mkt.label}, {mkt.currency})")
     typer.echo(f"db: {DB_PATH}")
     typer.echo(f"schema_version: {version} (expected {SCHEMA_VERSION})")
     typer.echo(f"as_of: {as_of or '-'}")
     typer.echo(f"instruments: stock={count_map.get('stock', 0)} etf={count_map.get('etf', 0)}")
     typer.echo(f"daily_bars: {bars}")
     typer.echo(f"indicators: dynamic ({indicators} custom enabled)")
+    if not mkt.trading:
+        typer.echo(f"trading: {mkt.label} 주식 모드에서는 계획·주문·자동 실행을 쓰지 않습니다")
     try:
+        if not mkt.trading:
+            raise _SkipTrading
         from .broker.kis import broker_status
         from .trading import list_orders, list_plans
         broker = broker_status()
         typer.echo(f"trading: broker={'enabled' if broker.get('enabled') else 'disabled'} env={broker.get('env') or '-'} plans={len(list_plans())} orders={len(list_orders(limit=1000))}")
+        from .guard import state as guard_state
+        from .live import daemon_status
+        daemon, safeguards = daemon_status(), guard_state(broker.get("env"))
+        typer.echo(f"daemon: {daemon['status']} alive={daemon['alive']}{' STALE' if daemon['stale'] else ''} phase={daemon['phase']} mode={daemon.get('mode') or '-'}")
+        typer.echo(f"guard: kill_switch={'ON' if safeguards['trade_kill_switch'] else 'off'} entries={safeguards['usage']['entries']}/{safeguards['trade_daily_entry_limit'] or '무제한'} require_paper={'on' if safeguards['trade_require_paper_first'] else 'off'}")
+    except _SkipTrading:
+        pass
     except Exception as exc:
         typer.echo(f"trading: unavailable ({exc})")
-    krx = krx_status()
-    typer.echo(f"KRX credentials: {krx['mode']} (source={krx['source'] or '-'}) delay={request_delay():g}s")
+    if mkt.trading:
+        krx = krx_status()
+        typer.echo(f"KRX credentials: {krx['mode']} (source={krx['source'] or '-'}) delay={request_delay():g}s")
+    else:
+        from .providers.massive import massive_status
+
+        massive = massive_status()
+        typer.echo(f"Massive credentials: {massive['mode']} (source={massive['source'] or '-'}) delay={massive['request_delay_sec']:g}s")
     typer.echo("failed_ingest_runs:")
     if failures:
         for row in failures:
@@ -53,14 +110,18 @@ def doctor() -> None:
 
 @app.command()
 def ingest(
-    days: int = typer.Option(400),
+    days: int = typer.Option(None, help="수집할 최근 캘린더 일수. 생략하면 시장 기본값(한국 400일, 미국 30일)."),
     force: bool = typer.Option(False),
-    source: str = typer.Option("krx", help="krx(기본), fdr(전종목 스냅샷 대체, 주식만 지원) 또는 alphasquare(로컬 유니버스 종목별 개별 조회, 최후 폴백, --days 그대로 적용)"),
+    source: str = typer.Option(None, help="한국: krx(기본)·fdr·alphasquare / 미국: massive. 생략하면 시장 기본 소스."),
     capture: bool = typer.Option(True, help="수집 후 저장된 프리셋의 최신 거래일 신호를 로그에 남깁니다."),
+    market: str = typer.Option(None, "--market", "-m", help=MARKET_HELP),
 ) -> None:
-    """Ingest KRX daily snapshots; indicators are calculated on demand."""
+    """Ingest daily snapshots for the selected market; indicators are calculated on demand."""
     from .ingest import run_ingest
     from .signals import capture as capture_signals
+    _use_market(market)
+    mkt = market_mode.active()
+    days = days or mkt.default_ingest_days
     try:
         run_ingest(days=days, force=force, source=source)
     except (RuntimeError, ValueError) as exc:
@@ -75,10 +136,12 @@ def ingest(
         typer.echo(f"signals: {result['dates']}일 수집, 신호 {result['rows']}건 (건너뜀 {result['skipped']})")
 
 
-@app.command("krx-latest")
-def krx_latest_day() -> None:
-    """Query KRX's most recently published trading day without running a full ingest."""
+@app.command("latest-day")
+@app.command("krx-latest", hidden=True)
+def latest_day(market: str = typer.Option(None, "--market", "-m", help=MARKET_HELP)) -> None:
+    """Query the data source's most recently published trading day without running a full ingest."""
     from .ingest import latest_trading_day
+    _use_market(market)
     try:
         typer.echo(latest_trading_day())
     except RuntimeError as exc:
@@ -93,9 +156,14 @@ app.add_typer(config_app, name="config")
 @config_app.command("show")
 def config_show() -> None:
     """Show resolved KRX credentials and request delay."""
+    from .providers.massive import massive_status
+
     krx = krx_status()
     typer.echo(f"home: {MSCR_HOME}")
+    typer.echo(f"market: {market_mode.stored_default()} (default)")
     typer.echo(f"krx: mode={krx['mode']} source={krx['source'] or '-'} key={krx['openapi_key_masked'] or '-'} id={krx['krx_id_masked'] or '-'} stored={','.join(krx['stored']) or '-'}")
+    massive = massive_status()
+    typer.echo(f"massive: mode={massive['mode']} source={massive['source'] or '-'} key={massive['api_key_masked'] or '-'} delay={massive['request_delay_sec']:g}s")
     typer.echo(f"delay: {request_delay():g}s (source={request_delay_source()})")
     from .broker.kis import broker_status
     broker = broker_status()
@@ -124,10 +192,47 @@ def config_krx_clear() -> None:
     typer.echo(f"cleared: mode={status['mode']}")
 
 
+@config_app.command("market")
+def config_market(key: str = typer.Argument(None, help="kr 또는 us. 생략하면 현재 기본값을 보여줍니다.")) -> None:
+    """Show or set the default market mode used by the CLI and the web UI."""
+    if key is None:
+        typer.echo(market_mode.stored_default())
+        return
+    try:
+        typer.echo(f"default market: {market_mode.save_default(key).key}")
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@config_app.command("massive")
+def config_massive(api_key: str = typer.Option(None, "--api-key", help="Massive API key; pass '' to remove.")) -> None:
+    """Store the Massive (US market data) API key in ~/.mscr (0600)."""
+    from .providers.massive import massive_status, save_massive_credentials
+
+    if api_key is None:
+        status = massive_status()
+        typer.echo(f"massive: mode={status['mode']} source={status['source'] or '-'} key={status['api_key_masked'] or '-'} delay={status['request_delay_sec']:g}s")
+        return
+    status = save_massive_credentials(api_key=api_key)
+    typer.echo(f"massive: mode={status['mode']} key={status['api_key_masked'] or '-'}")
+
+
+@config_app.command("massive-clear")
+def config_massive_clear() -> None:
+    """Remove the stored Massive API key."""
+    from .providers.massive import clear_massive_credentials
+
+    clear_massive_credentials()
+    typer.echo("massive: cleared")
+
+
 @config_app.command("delay")
 def config_delay(seconds: float = typer.Argument(..., min=0, max=10)) -> None:
     """Store the request delay used by ingest."""
     save_settings("settings", load_settings("settings") | {"request_delay_sec": seconds})
+    massive = massive_status()
+    typer.echo(f"massive: mode={massive['mode']} source={massive['source'] or '-'} key={massive['api_key_masked'] or '-'} delay={massive['request_delay_sec']:g}s")
     typer.echo(f"delay: {request_delay():g}s (source={request_delay_source()})")
 
 @app.command()
@@ -143,7 +248,13 @@ def serve(
         webbrowser.open(f"http://127.0.0.1:{port}")
     uvicorn.run("mscr.api.app:app", host="127.0.0.1", port=port, reload=reload)
 
-trade_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Trading plans, KIS orders and fill sync.")
+trade_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Trading plans, KIS orders and fill sync (Korean market only).")
+
+
+@trade_app.callback()
+def trade_main() -> None:
+    """계획·주문은 KIS 국내주식 API에 묶여 있어 한국 주식 모드에서만 동작합니다."""
+    _require_trading()
 app.add_typer(trade_app, name="trade")
 
 
@@ -279,6 +390,103 @@ def trade_sync() -> None:
         typer.echo(f"  #{order.get('id')} {order['ticker']} {order['side']} status={order['status']} filled={order.get('filled_quantity') or 0:g}@{order.get('filled_price') or 0:g} fee={order.get('fee') or 0:g} tax={order.get('tax') or 0:g} trade_id={order.get('trade_id') or '-'}")
 
 
+@trade_app.command("daemon")
+def trade_daemon(
+    live: bool = typer.Option(False, "--live", help="Send real orders instead of watching only."),
+    plan: list[int] = typer.Option(None, "--plan", help="Limit to plan ids."),
+    poll_sec: float = typer.Option(2.0, "--poll-sec", help="REST fallback polling interval in seconds."),
+    no_stream: bool = typer.Option(False, "--no-stream", help="Skip the websocket and poll quotes over REST only."),
+    no_wait: bool = typer.Option(False, "--no-wait", help="Exit instead of waiting for the market to open."),
+    unfilled_timeout: float = typer.Option(60.0, "--unfilled-timeout", help="Seconds before an unfilled order is cancelled (entry) or repriced to market (exit)."),
+    max_cycles: int = typer.Option(None, "--max-cycles", help="Stop after N loop iterations (smoke test)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the live-order confirmation (for launchd/cron watchdogs)."),
+) -> None:
+    """Watch live quotes and execute plans intraday until the market closes."""
+    init_db()
+    import signal
+
+    from .live import run_daemon
+    broker = _live_broker()
+    if live and not yes and not typer.confirm(f"실시간 자동 실주문을 시작합니다 (env={broker.env}, account={broker.account_masked}). 계속할까요?"):
+        raise typer.Exit(code=1)
+    stop_event = threading.Event()
+    for received in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(received, lambda *_: stop_event.set())
+
+    def show(kind: str, message: str, _data: dict) -> None:
+        typer.echo(f"{datetime.now().strftime('%H:%M:%S')} [{kind}] {message}")
+
+    try:
+        result = run_daemon(broker=broker, dry_run=not live, plan_ids=list(plan) if plan else None,
+                            poll_sec=poll_sec, use_stream=not no_stream, wait_for_open=not no_wait,
+                            unfilled_timeout=unfilled_timeout, max_cycles=max_cycles,
+                            stop_event=stop_event, on_event=show)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"done: {result['reason']} ticks={result['ticks']} orders={result['orders']} cycles={result['cycles']}")
+
+
+@trade_app.command("daemon-status")
+def trade_daemon_status() -> None:
+    """Show the live daemon's heartbeat, so a dead watcher is visible immediately."""
+    init_db()
+    from .live import daemon_status
+    state = daemon_status()
+    age = state.get("heartbeat_age_sec")
+    typer.echo(f"daemon: {state['status']} alive={state['alive']} stale={state['stale']} phase={state['phase']} mode={state.get('mode') or '-'} stream={state.get('stream') or '-'}")
+    typer.echo(f"  heartbeat={state.get('heartbeat_at') or '-'}{f' ({age:.0f}초 전)' if age is not None else ''} plans={state.get('plans') or 0} tickers={state.get('tickers') or 0} ticks={state.get('ticks') or 0} orders={state.get('orders') or 0}")
+    if state.get("last_error"): typer.echo(f"  error: {state['last_error']}")
+    if state.get("message"): typer.echo(f"  message: {state['message']}")
+
+
+@trade_app.command("guard")
+def trade_guard(
+    kill: str = typer.Option(None, "--kill", help="Engage the kill switch with a reason (blocks new entries, never exits)."),
+    release: bool = typer.Option(False, "--release", help="Release the kill switch."),
+    daily_entries: int = typer.Option(None, "--daily-entries", help="Max new entries per day (0 = unlimited)."),
+    daily_notional: int = typer.Option(None, "--daily-notional", help="Max new entry notional per day in KRW (0 = unlimited)."),
+    require_paper: bool = typer.Option(None, "--require-paper/--no-require-paper", help="Require a paper fill for a plan before it may trade live."),
+) -> None:
+    """Inspect or change the automated-order safeguards."""
+    init_db()
+    from . import guard as guard_module
+    try:
+        if kill: guard_module.engage(kill)
+        if release: guard_module.release()
+        if daily_entries is not None or daily_notional is not None or require_paper is not None:
+            guard_module.save(None, trade_daily_entry_limit=daily_entries, trade_daily_notional_limit_krw=daily_notional,
+                              trade_require_paper_first=None if require_paper is None else int(require_paper))
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    from .broker.kis import broker_status
+    state = guard_module.state(broker_status().get("env"))
+    typer.echo(f"kill_switch: {'ON' if state['trade_kill_switch'] else 'off'}{' — ' + state['trade_kill_reason'] if state['trade_kill_reason'] else ''}")
+    typer.echo(f"daily_entries: {state['usage']['entries']}/{state['trade_daily_entry_limit'] or '무제한'} (env={state['env'] or '-'}, {state['usage']['date']})")
+    typer.echo(f"daily_notional: {state['usage']['notional_krw']:,.0f}원/{f"{state['trade_daily_notional_limit_krw']:,}원" if state['trade_daily_notional_limit_krw'] else '무제한'}")
+    typer.echo(f"require_paper_first: {'on' if state['trade_require_paper_first'] else 'off'}")
+
+
+@trade_app.command("panic")
+def trade_panic(reason: str = typer.Option("수동 정지", "--reason", help="Why the kill switch was engaged.")) -> None:
+    """Engage the kill switch and cancel every order still resting in the market."""
+    init_db()
+    from .live import panic
+    broker = _live_broker()
+    if not typer.confirm(f"킬스위치를 올리고 미체결 주문을 전부 취소합니다 (env={broker.env}, account={broker.account_masked}). 계속할까요?"):
+        raise typer.Exit(code=1)
+    try:
+        result = panic(broker=broker, reason=reason)
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"kill_switch: ON — {result['guard']['trade_kill_reason']}")
+    typer.echo(f"cancelled: {len(result['cancelled'])}")
+    for order in result["cancelled"]:
+        typer.echo(f"  #{order.get('id')} {order['ticker']} {order['leg']} status={order['status']} {order.get('message') or ''}".rstrip())
+
+
 @trade_app.command("reconcile")
 def trade_reconcile() -> None:
     """Compare local replayed positions against the broker's real account balance."""
@@ -345,6 +553,7 @@ def risk_command(
     max_heat: float = typer.Option(None, "--max-heat", help="포트폴리오 히트 한도(총자산 대비 %)."),
 ) -> None:
     """Show portfolio heat: how much of total assets every open and pending plan can lose."""
+    _require_trading()
     from .risk import heat, save_limits
     if per_trade is not None or max_heat is not None:
         current = heat()["limits"]
@@ -380,6 +589,7 @@ def _percent(value) -> str:
 @app.command("review")
 def review_command(limit: int = typer.Option(20, "--limit", min=1, max=200)) -> None:
     """Settle finished plans in R and show setup-level statistics."""
+    _require_trading()
     from .review import plan_results, stats
     summary = stats()
     typer.echo(f"closed: {summary['trades']}건 · 승률 {_percent(summary['win_rate'])} · 기대 {_r(summary['expectancy_r'])} · 합계 {_r(summary['total_r'])} · 진행 {summary['open']['count']}건")

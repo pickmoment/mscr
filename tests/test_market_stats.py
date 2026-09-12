@@ -75,13 +75,13 @@ def test_compute_snaps_to_the_nearest_trading_day(base_db):
 def test_compute_reports_breadth_and_new_extremes(base_db):
     path, dates = base_db
     result = market_stats.compute(dates[-1], path)
-    assert result["counts"] == {"total": 2, "stock": 2, "etf": 0, "kospi": 1, "kosdaq": 1}
+    assert result["counts"] == {"total": 2, "stock": 2, "etf": 0, "by_market": {"KOSPI": 1, "KOSDAQ": 1, "KONEX": 0}}
     assert result["breadth"]["all"]["up"] == 1
     assert result["breadth"]["all"]["down"] == 1
     assert result["breadth"]["all"]["new_high"] == 1
     assert result["breadth"]["all"]["new_low"] == 1
-    assert result["breadth"]["kospi"]["up"] == 1
-    assert result["breadth"]["kosdaq"]["down"] == 1
+    assert result["breadth"]["by_market"]["KOSPI"]["up"] == 1
+    assert result["breadth"]["by_market"]["KOSDAQ"]["down"] == 1
     gainers = result["rankings"]["gainers_top"]
     assert gainers[0]["ticker"] == "000001"
     assert gainers[0]["change_pct"] == pytest.approx(30.0)

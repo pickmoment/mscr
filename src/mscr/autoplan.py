@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .db import db_session
+from .market import bar_source
 from .indicators import atr
 
 STOP_MULTIPLES = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0)
@@ -35,7 +36,7 @@ _STATS_CACHE: dict[tuple[str, int], dict[float, dict[str, float]]] = {}
 
 
 def _bars(db) -> pd.DataFrame:
-    rows = db.execute("SELECT ticker,date,open,high,low,close,halted FROM daily_bars WHERE source='krx_snapshot' ORDER BY ticker,date").fetchall()
+    rows = db.execute(f"SELECT ticker,date,open,high,low,close,halted FROM daily_bars WHERE source='{bar_source()}' ORDER BY ticker,date").fetchall()
     return pd.DataFrame([dict(row) for row in rows])
 
 
@@ -117,7 +118,7 @@ def _breakeven_reach(stat: dict[str, float], w1: float, w2: float) -> float | No
 
 
 def _latest_atr(db, ticker: str) -> tuple[float, str, float]:
-    rows = db.execute("SELECT date,high,low,close FROM daily_bars WHERE ticker=? AND source='krx_snapshot' ORDER BY date", (ticker,)).fetchall()
+    rows = db.execute(f"SELECT date,high,low,close FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date", (ticker,)).fetchall()
     if len(rows) < ATR_PERIOD + 1: raise ValueError(f"일봉이 {ATR_PERIOD + 1}개 이상 필요합니다 (현재 {len(rows)}개)")
     frame = pd.DataFrame([dict(row) for row in rows])
     series = atr(frame.high, frame.low, frame.close, ATR_PERIOD).dropna()

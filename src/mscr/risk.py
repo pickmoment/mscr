@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .db import db_session
+from . import market
 from .portfolio import snapshot
 from .trading import plan_exposure
 
@@ -64,7 +65,9 @@ def heat(path=None) -> dict[str, Any]:
     configured = limits(path)
     portfolio = snapshot(path)
     equity = float(portfolio["total_assets"])
-    plans = plan_exposure(path)
+    # 계획·손절은 국내 전용 기능이다. 미국 모드에서는 계획이 없는 상태의 히트(=0)를 보여준다.
+    trading_market = market.active().trading
+    plans = plan_exposure(path) if trading_market else []
     rows: list[dict[str, Any]] = []
     open_risk = pending_risk = 0.0
     for plan in plans:
@@ -90,11 +93,11 @@ def heat(path=None) -> dict[str, Any]:
         warnings.append("총자산이 0입니다 — 포트폴리오 원장과 현금을 입력하면 리스크 비율이 계산됩니다")
     elif total_risk > heat_limit:
         warnings.append(f"포트폴리오 히트가 한도를 넘었습니다: {total_risk / equity * 100:.2f}% > {configured['max_portfolio_heat_pct']:g}%")
-    if unprotected:
+    if unprotected and trading_market:
         warnings.append(f"손절 계획이 없는 보유 종목 {len(unprotected)}건 — 손실 한도가 걸려 있지 않습니다")
     return {
         "as_of": max((plan["as_of"] for plan in plans if plan["as_of"]), default=None),
-        "equity": equity, "cash_krw": portfolio["cash_krw"], "market_value": portfolio["total_market_value"],
+        "equity": equity, "cash_krw": portfolio["cash"], "market_value": portfolio["total_market_value"],
         "limits": configured,
         "open_risk_krw": open_risk, "pending_risk_krw": pending_risk, "total_risk_krw": total_risk,
         "heat_pct": (total_risk / equity * 100) if equity > 0 else None,

@@ -7,7 +7,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from . import market
 from .db import db_session
+from .market import bar_source
 
 LIMIT_PCT = 29.5
 NEW_EXTREME_WINDOW = 250
@@ -18,7 +20,7 @@ RANK_SIZE = 50
 
 def available_dates(path=None) -> list[str]:
     with db_session(path) as db:
-        rows = db.execute("SELECT DISTINCT date FROM daily_bars WHERE source='krx_snapshot' ORDER BY date").fetchall()
+        rows = db.execute(f"SELECT DISTINCT date FROM daily_bars WHERE source='{bar_source()}' ORDER BY date").fetchall()
     return [row[0] for row in rows]
 
 
@@ -80,12 +82,13 @@ def compute(date: str, path=None) -> dict[str, Any]:
     start_date = window_dates[0]
     prev_date = window_dates[-2] if len(window_dates) > 1 else None
 
+    mkt = market.active()
     with db_session(path) as db:
         instruments = pd.DataFrame([dict(r) for r in db.execute(
-            "SELECT ticker,name,kind,market,category FROM instruments WHERE is_preferred=0 AND is_spac=0"
+            "SELECT ticker,name,kind,market,category FROM instruments WHERE region=? AND is_preferred=0 AND is_spac=0", (mkt.region,)
         ).fetchall()])
         bars = pd.DataFrame([dict(r) for r in db.execute(
-            "SELECT ticker,date,open,high,low,close,volume,value,nav,halted FROM daily_bars WHERE source='krx_snapshot' AND date>=? AND date<=?",
+            f"SELECT ticker,date,open,high,low,close,volume,value,nav,halted FROM daily_bars WHERE source='{bar_source()}' AND date>=? AND date<=?",
             (start_date, resolved),
         ).fetchall()])
         fundamentals = pd.DataFrame([dict(r) for r in db.execute(
@@ -122,11 +125,11 @@ def compute(date: str, path=None) -> dict[str, Any]:
     active["new_low"] = active["low"] <= active["roll_low"]
     active["premium_pct"] = np.where((active["kind"] == "etf") & (active["nav"] > 0), (active["close"] / active["nav"] - 1) * 100, np.nan)
 
+    # 거래소별 지표는 시장 모드가 가진 거래소 목록(KOSPI·KOSDAQ… / NASDAQ·NYSE…)을 그대로 돈다.
     breadth = {
         "all": _breadth(active, today),
-        "kospi": _breadth(active[active["market"] == "KOSPI"], today[today["market"] == "KOSPI"]),
-        "kosdaq": _breadth(active[active["market"] == "KOSDAQ"], today[today["market"] == "KOSDAQ"]),
         "etf": _breadth(active[active["kind"] == "etf"], today[today["kind"] == "etf"]),
+        "by_market": {name: _breadth(active[active["market"] == name], today[today["market"] == name]) for name in mkt.exchanges},
     }
 
     prev_value_sum = None
@@ -137,7 +140,7 @@ def compute(date: str, path=None) -> dict[str, Any]:
         "value_sum": _clean(today["value"].fillna(0).sum()),
         "value_sum_prev": prev_value_sum,
         "volume_sum": _clean(today["volume"].fillna(0).sum()),
-        "market_cap_sum": {market: _clean(today.loc[today["market"] == market, "market_cap"].fillna(0).sum()) for market in ("KOSPI", "KOSDAQ")},
+        "market_cap_sum": {name: _clean(today.loc[today["market"] == name, "market_cap"].fillna(0).sum()) for name in mkt.exchanges},
     }
 
     rank_cols = ["ticker", "name", "market", "close", "change_pct", "value", "volume", "vol_ratio", "premium_pct"]
@@ -168,7 +171,9 @@ def compute(date: str, path=None) -> dict[str, Any]:
     sectors = []
     capped = stocks[stocks["market_cap"] > 0]
     if not capped.empty:
-        bands = [("대형주 (1조원 이상)", 1e12, float("inf")), ("중형주 (1천억~1조원)", 1e11, 1e12), ("소형주 (1천억원 미만)", 0, 1e11)]
+        bands = ([("대형주 (100억달러 이상)", 1e10, float("inf")), ("중형주 (20억~100억달러)", 2e9, 1e10), ("소형주 (20억달러 미만)", 0, 2e9)]
+                 if mkt.region == market.US.region else
+                 [("대형주 (1조원 이상)", 1e12, float("inf")), ("중형주 (1천억~1조원)", 1e11, 1e12), ("소형주 (1천억원 미만)", 0, 1e11)])
         for label, low, high in bands:
             group = capped[(capped["market_cap"] >= low) & (capped["market_cap"] < high)]
             if group.empty:
@@ -190,12 +195,14 @@ def compute(date: str, path=None) -> dict[str, Any]:
         "total": int(len(today)),
         "stock": int((today["kind"] == "stock").sum()),
         "etf": int((today["kind"] == "etf").sum()),
-        "kospi": int((today["market"] == "KOSPI").sum()),
-        "kosdaq": int((today["market"] == "KOSDAQ").sum()),
+        "by_market": {name: int((today["market"] == name).sum()) for name in mkt.exchanges},
     }
 
     return {
         "date": resolved,
+        "market": mkt.key,
+        "currency": mkt.currency,
+        "exchanges": list(mkt.exchanges),
         "requested_date": date,
         "prev_date": prev_date,
         "counts": counts,

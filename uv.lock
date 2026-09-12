@@ -739,6 +739,7 @@ dependencies = [
     { name = "requests" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -757,6 +758,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31" },
     { name = "typer", specifier = ">=0.16" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35" },
+    { name = "websockets", specifier = ">=13" },
 ]
 
 [package.metadata.requires-dev]

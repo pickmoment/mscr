@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
 import { BarsResponse, ChartBar, ChartPlotSpec } from '../lib/api';
-import { compactVolume, won } from '../lib/format';
+import { compactVolume, money } from '../lib/format';
 import { MeasureBar, MeasureMode, MeasureRange, MeasureSpan, MeasureTool, SpanTool } from '../lib/measure';
 import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
 import { alpha, readTokens, UI_FONT } from '../lib/tokens';
@@ -81,7 +81,7 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     if (!ref.current || !data || !data.bars.length) return;
     const t = readTokens();
     const chart = createChart(ref.current, { autoSize: true, layout: { background: { type: ColorType.Solid, color: t.surface }, textColor: t.text3, fontFamily: UI_FONT, fontSize: 12, attributionLogo: true, panes: { separatorColor: t.line, separatorHoverColor: t.line2, enableResize: true } }, grid: { vertLines: { color: t.line }, horzLines: { color: t.line } }, crosshair: { mode: CrosshairMode.Normal }, localization: { locale: 'ko-KR', dateFormat: 'yyyy-MM-dd' }, timeScale: { timeVisible: true, secondsVisible: false } });
-    const candles = chart.addSeries(CandlestickSeries, { priceScaleId: 'right', priceFormat: { type: 'custom', minMove: 1, formatter: won }, upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false }, 0);
+    const candles = chart.addSeries(CandlestickSeries, { priceScaleId: 'right', priceFormat: { type: 'custom', minMove: 1, formatter: money }, upColor: t.up, downColor: t.down, wickUpColor: t.up, wickDownColor: t.down, borderVisible: false }, 0);
     candles.setData(data.bars.map(bar => ({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close, color: bar.halted ? t.text3 : undefined, wickColor: bar.halted ? t.text3 : undefined, borderColor: bar.halted ? t.text3 : undefined })));
     const volume = chart.addSeries(HistogramSeries, { priceScaleId: 'volume', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, 0);
     volume.setData(data.bars.map(bar => ({ time: bar.time, value: bar.volume, color: bar.close >= bar.open ? alpha(t.up, .47) : alpha(t.down, .47) })));
@@ -234,10 +234,10 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
         {barPct != null && <span className={barPct >= 0 ? 'up' : 'down'}>{signed(barPct)}</span>}
       </div>
       <div className="chart-tip__grid">
-        <i>시가</i><b>{won(hover.bar.open)}</b>
-        <i>고가</i><b>{won(hover.bar.high)}</b>
-        <i>저가</i><b>{won(hover.bar.low)}</b>
-        <i>종가</i><b className={hover.bar.close >= hover.bar.open ? 'up' : 'down'}>{won(hover.bar.close)}</b>
+        <i>시가</i><b>{money(hover.bar.open)}</b>
+        <i>고가</i><b>{money(hover.bar.high)}</b>
+        <i>저가</i><b>{money(hover.bar.low)}</b>
+        <i>종가</i><b className={hover.bar.close >= hover.bar.open ? 'up' : 'down'}>{money(hover.bar.close)}</b>
         <i>거래량</i><b>{compactVolume(hover.bar.volume)}</b>
       </div>
       {(toLast != null || hover.bar.halted) && <div className="chart-tip__foot">

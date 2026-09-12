@@ -1,6 +1,6 @@
 # mscr
 
-로컬 단일 사용자용 KRX 주식·ETF 스크리너, 종목 차트, 포트폴리오·리스크 관리 도구입니다. 데이터는 일봉 EOD 기준이며 실시간 시세·장중 트리거는 다루지 않습니다. 저장된 프리셋이 매일 어떤 종목을 잡았는지 기록해 브리핑·프리셋 검증에 쓰고, 한국투자증권(KIS) Open API로 실주문까지 낼 수 있습니다.
+로컬 단일 사용자용 주식·ETF 스크리너, 종목 차트, 포트폴리오·리스크 관리 도구입니다. 한국(KRX)과 미국(Massive) 두 시장을 각각의 모드로 나눠 쓰며, 두 시장을 한 화면에 섞어 보지는 않습니다. 스크리닝과 분석은 일봉 EOD 기준이고, 세워 둔 트레이딩 계획만 장중에 실시간 체결가로 감시해 자동으로 집행합니다. 저장된 프리셋이 매일 어떤 종목을 잡았는지 기록해 브리핑·프리셋 검증에 쓰고, 한국투자증권(KIS) Open API로 실주문까지 낼 수 있습니다.
 
 ## 설치
 
@@ -14,7 +14,41 @@ bun run build
 cd ..
 ```
 
+## 시장 모드 (한국 / 미국)
+
+시장은 한 번에 하나만 켜서 씁니다. 화면 상단의 `한국`·`미국` 토글로 바꾸며, 고른 모드는 저장돼 다음 실행과 CLI에도 이어집니다. 종목 유니버스·일봉·프리셋·관심목록·포트폴리오가 모드별로 갈라지므로, 한국 모드에서는 미국 종목이 검색되지 않고 그 반대도 마찬가지입니다.
+
+```bash
+uv run mscr config market us      # 기본 모드 저장(화면·CLI 공통)
+uv run mscr config market         # 현재 기본 모드 확인
+uv run mscr --market us doctor    # 이번 실행만 미국 모드로
+uv run mscr ingest --market us    # 하위 명령에 직접 붙여도 됩니다
+MSCR_MARKET=us uv run mscr doctor # 환경변수가 저장값보다 우선
+```
+
+모드에 따라 갈라지는 것은 다음과 같습니다.
+
+| | 한국 | 미국 |
+|---|---|---|
+| 시세 소스 | KRX Open API(+ FinanceDataReader·alpha-square 폴백) | Massive(massive.com) |
+| 거래소 필터 | KOSPI · KOSDAQ · KONEX | NASDAQ · NYSE · AMEX · CBOE · OTHER |
+| 통화 표기 | 원 | 달러 |
+| 기본 수집 기간 | 400일 | 30일 |
+| 프리셋·관심목록 | 한국 것만 보임 | 미국 것만 보임 |
+| 포트폴리오·현금 | 6자리 종목코드 매매만, `cash_krw` | 미국 티커 매매만, `cash_usd` |
+
+미국 모드에서는 다음 기능이 빠집니다 — 모두 국내 전용 연동에 묶여 있기 때문입니다.
+
+- **계획·주문 실행·자동 실행·리스크·복기**: KIS Open API 국내주식 주문에 묶여 있습니다. 미국 모드에서는 탭이 사라지고, API를 직접 호출해도 409로 막힙니다.
+- **현재 시황**: alpha-square의 국내 전용 실시간 데이터입니다.
+- **차트 `실시간`(분봉) 원천**: 같은 이유로 미국 모드에서는 로컬 일봉만 봅니다. Massive 일봉은 이미 수정주가라 별도 보정을 하지 않습니다.
+- **PER·PBR·시가총액 등 재무 스냅샷**: Massive에서 전종목 재무를 받으려면 종목마다 개별 호출이 필요해 수집하지 않습니다. 미국 프리셋은 시가총액 대신 거래대금으로 유동성을 거릅니다.
+
+프리셋·관심목록 이름은 두 시장을 통틀어 유일해야 합니다. 다른 모드에 같은 이름이 있으면 저장이 막히고(409) 덮어쓰지 않습니다.
+
 ## 최초 데이터 수집
+
+아래 설명은 한국 모드 기준입니다. 미국 주식은 [미국 데이터 수집(Massive)](#미국-데이터-수집-massive)을 참고하세요.
 
 ```bash
 uv run mscr ingest
@@ -22,10 +56,10 @@ uv run mscr ingest
 
 기본값은 최근 400일(캘린더)입니다. 수집은 날짜별로 직렬·지연·재시도로 진행됩니다. 중단 후 같은 명령을 실행하면 `ok` 또는 `holiday`로 기록된 날짜는 건너뛰고 실패하거나 아직 수집하지 않은 날짜를 재시도합니다.
 
-ingest 없이 KRX가 실제로 발표한 최신 거래일만 확인하려면:
+ingest 없이 데이터 제공처가 실제로 발표한 최신 거래일만 확인하려면(현재 시장 모드 기준):
 
 ```bash
-uv run mscr krx-latest
+uv run mscr latest-day
 ```
 
 `--days`는 새로 수집할 거래일 수가 아니라 확인할 최근 캘린더 범위입니다. KRX가 발표한 최신 거래일부터 거슬러 올라간 캘린더 N일 범위이며(`--days 1`이면 최신 거래일 하루만), 이미 `ok`/`holiday`로 기록된 날짜는 그중에서도 건너뜁니다. 예를 들어 최근 일주일만 확인하려면 다음과 같이 실행합니다.
@@ -92,6 +126,40 @@ export KRX_ID='아이디'
 export KRX_PW='비밀번호'
 uv run mscr ingest
 ```
+
+### 미국 데이터 수집 (Massive)
+
+미국 전종목 일봉은 [Massive](https://massive.com)의 "일별 시장 요약"(`/v2/aggs/grouped/...`)으로 받습니다. 거래일 하루가 한 번의 호출로 끝나므로, 수집 구조는 KRX와 같고 소스만 갈아 끼운 형태입니다. 종목 목록(이름·거래소·주식/ETF 구분)은 `/v3/reference/tickers`를 커서로 훑어 채웁니다.
+
+API 키는 <https://massive.com/dashboard/keys>에서 발급해 환경변수나 설정 파일에 둡니다. 키는 SQLite나 프로젝트 파일에 저장하지 않습니다.
+
+```bash
+export MASSIVE_API_KEY='발급받은 키'      # 환경변수가 저장값보다 우선
+uv run mscr config massive --api-key '…'  # 또는 ~/.mscr/massive_credentials.json(0600)에 저장
+uv run mscr config massive                # 현재 상태 확인
+```
+
+수집은 한국과 같은 명령에 `--market us`만 붙입니다. 기본 수집 기간은 30일입니다.
+
+```bash
+uv run mscr ingest --market us --days 30
+uv run mscr latest-day --market us        # 데이터가 게시된 최신 거래일만 확인
+uv run mscr doctor --market us            # 미국 모드 수집 상태
+```
+
+**무료 플랜(분당 5회, 2년 히스토리)을 기준으로 동작합니다.** 호출 사이 기본 12초를 쉬며, 이 값은 `설정` 탭이나 `MSCR_MASSIVE_DELAY_SEC`로 바꿉니다(유료 플랜이면 0으로 낮추세요). 지연이 곧 수집 시간이므로 기간을 넓힐수록 오래 걸립니다 — 거래일 하루당 1회 호출이라 `--days 30`이면 약 4분, 스크리너 기본 프리셋이 요구하는 250봉(≈1년)을 채우려면 한 번에 약 1시간이 듭니다. 중간에 끊어도 이미 `ok`로 기록된 날짜는 건너뛰므로 나눠서 실행해도 됩니다.
+
+```bash
+export MSCR_MASSIVE_DELAY_SEC=0           # 유료 플랜이면 지연 없이
+uv run mscr ingest --market us --days 400 # 무료 플랜 히스토리 한도(2년) 안에서 원하는 만큼
+```
+
+알아 둘 점이 몇 가지 있습니다.
+
+- **거래대금(`value`)은 근사값입니다.** Massive는 거래대금을 따로 주지 않아 `거래량 × VWAP`(VWAP이 없으면 종가)로 계산합니다. 유동성 필터로 쓰기엔 충분하지만 정확한 금액은 아닙니다.
+- **휴장일 판정은 응답으로 합니다.** 미국 휴일 달력을 따로 받지 않고 평일을 순회하되, 데이터가 비어 오는 날을 `holiday`로 기록합니다.
+- **SPAC 표시는 종목명 근사입니다.** 이름에 `Acquisition Corp`가 들어가면 SPAC으로 봅니다(한국은 '스팩' 문자열).
+- **거래소 이름은 MIC 코드를 접은 값입니다.** `XNAS`→NASDAQ, `XNYS`·`ARCX`→NYSE, `XASE`→AMEX, `BATS`·`XCBO`→CBOE, 나머지는 OTHER입니다.
 
 ### 사용자 지표
 
@@ -191,7 +259,7 @@ uv run mscr serve
 
 기본 주소는 <http://127.0.0.1:8765>입니다. 브라우저를 열지 않으려면 `uv run mscr serve --no-open`을 사용합니다.
 
-화면은 브리핑·스크리너·종목 상세·시장 통계·현재 시황·관심종목·포트폴리오·트레이딩·지표 관리·설정 열 탭으로 구성됩니다. 스크리너에서 boolean 수식을 실행하고 행을 선택하면 수정주가 차트와 동적 지표가 표시됩니다. 포트폴리오 거래 원장은 화면에서 입력하며 SQLite에 저장됩니다.
+화면은 브리핑·스크리너·종목 상세·시장 통계·현재 시황·관심종목·포트폴리오·트레이딩·지표 관리·설정 열 탭으로 구성됩니다(미국 모드에서는 [지원하지 않는 탭](#시장-모드-한국--미국)이 빠집니다). 스크리너에서 boolean 수식을 실행하고 행을 선택하면 수정주가 차트와 동적 지표가 표시됩니다. 포트폴리오 거래 원장은 화면에서 입력하며 SQLite에 저장됩니다.
 
 어느 화면에서 종목을 클릭하든 그 화면에 함께 보이던 종목 목록이 `종목 상세`로 같이 넘어갑니다. 헤더의 `◀`·`▶` 또는 키보드 `←`·`→`로 그 목록을 순서대로 넘겨보며, 가운데에 현재 위치(`4/5`)가 표시됩니다. 목록은 클릭한 화면 기준입니다 — 스크리너는 검색·필터·정렬이 적용된 표시 순서, 관심종목은 목록의 편입 순서, 시장 통계·현재 시황은 클릭한 순위표(또는 펼친 테마·업종)의 종목들입니다. 첫 종목에서는 `◀`가, 마지막 종목에서는 `▶`가 비활성화되고 방향키도 그 방향으로는 움직이지 않습니다. 방향키는 `종목 상세` 탭이 화면에 떠 있을 때만 동작하며, 입력칸(지표 파라미터·관심목록 선택 등)에 포커스가 있으면 그 입력값 조작이 우선입니다.
 
@@ -262,18 +330,22 @@ uv run mscr signals coverage               # 프리셋별 적재 상태
 
 ## 설정
 
-`설정` 탭에서 KRX 수집과 KIS 브로커 인증, 공통 옵션을 모두 관리합니다. 값은 `~/.mscr/`에 권한 `0600` 파일로 저장되고 SQLite에는 넣지 않습니다. **환경변수가 있으면 저장값보다 우선**하며, 화면과 CLI가 `source`(env/file)를 표시합니다.
+`설정` 탭에서 KRX·Massive 수집 인증과 KIS 브로커 인증, 공통 옵션을 모두 관리합니다(브로커 인증 카드는 한국 모드에서만 보입니다). 값은 `~/.mscr/`에 권한 `0600` 파일로 저장되고 SQLite에는 넣지 않습니다. **환경변수가 있으면 저장값보다 우선**하며, 화면과 CLI가 `source`(env/file)를 표시합니다.
 
 | 항목 | 저장 파일 | 환경변수 | CLI |
 |---|---|---|---|
 | KRX Open API 키 | `krx_credentials.json` | `KRX_OPENAPI_KEY` | `mscr config krx --openapi-key …` |
 | KRX 아이디·비밀번호(구형 웹) | `krx_credentials.json` | `KRX_ID`, `KRX_PW` | `mscr config krx --id … --pw …` |
 | KIS 앱키·앱시크릿·계좌·환경 | `kis_credentials.json` | `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT`, `KIS_ENV` | `mscr trade login` |
+| Massive API 키(미국 시세) | `massive_credentials.json` | `MASSIVE_API_KEY` | `mscr config massive --api-key …` |
 | 수집 요청 간격(초) | `settings.json` | `MSCR_REQUEST_DELAY_SEC` | `mscr config delay 1.2` |
+| Massive 요청 간격(초) | `settings.json` | `MSCR_MASSIVE_DELAY_SEC` | `설정` 탭 |
+| 기본 시장 모드 | `settings.json` | `MSCR_MARKET` | `mscr config market us` |
 
 ```bash
 uv run mscr config show        # 해석된 인증·간격과 각 출처
 uv run mscr config krx-clear   # 저장된 KRX 자격증명 삭제
+uv run mscr config massive-clear # 저장된 Massive API 키 삭제
 uv run mscr trade logout       # 저장된 KIS 자격증명 삭제
 ```
 
@@ -285,7 +357,7 @@ uv run mscr trade logout       # 저장된 KIS 자격증명 삭제
 
 인증 설정은 위 [설정](#설정) 절을 참고하세요. 화면(`설정` → `브로커 인증`), `mscr trade login`/`logout`, 환경변수 세 경로 모두 지원하며 환경변수가 우선입니다.
 
-계획은 종목·방향·수량·주문유형(지정가/시장가)과 돌파 매매 조건(진입가·손절가·1차/2차 익절가+비율·3차 트레일링 스탑)으로 정의합니다. 이 탭에서 직접 입력하거나, `종목 상세` 차트에서 선을 끌어 잡은 뒤 [차트 포지션 블록](#차트-포지션-블록)의 `계획 만들기`로 그대로 저장합니다. 최신 일봉의 고가/저가가 각 기준가를 건드리면 다음 단계로 진행합니다.
+계획은 종목·방향·수량·주문유형(지정가/시장가)과 돌파 매매 조건(진입가·손절가·1차/2차 익절가+비율·3차 트레일링 스탑)으로 정의합니다. 이 탭에서 직접 입력하거나, `종목 상세` 차트에서 선을 끌어 잡은 뒤 [차트 포지션 블록](#차트-포지션-블록)의 `계획 만들기`로 그대로 저장합니다. 가격이 각 기준가를 건드리면 다음 단계로 진행합니다 — 장중에는 [실시간 자동 실행](#실시간-자동-실행)이 체결가 틱으로, 수동 실행(`mscr trade run`)은 최신 일봉의 고가/저가로 판정합니다.
 
 ```text
 종목: 005930 / 매수 / 10주 / 지정가 71,000원
@@ -361,23 +433,103 @@ uv run mscr review
 
 **최대 손실 금액은 보장이 아닙니다.** 일봉 EOD 평가 구조라 갭 하락 시 손절가를 크게 밑도는 시가에 시장가로 청산됩니다. 또 한도는 계획 1건 기준이므로 계획 여러 개가 동시에 열리면 합산 손실이 한도를 넘습니다. 이 두 가지는 화면에도 항상 표시됩니다.
 
-실행 경로는 두 가지입니다.
+실행 경로는 세 가지입니다.
 
 ```bash
-uv run mscr trade plans        # 계획과 현재 단계·다음 동작
-uv run mscr trade run          # 모의 실행(dry-run): 주문 없이 기록만
-uv run mscr trade run --live   # 실주문 전송 (확인 프롬프트)
-uv run mscr trade sync         # 체결 조회 후 기록·포트폴리오 반영
+uv run mscr trade plans          # 계획과 현재 단계·다음 동작
+uv run mscr trade run            # 모의 실행(dry-run): 주문 없이 판정만
+uv run mscr trade run --live     # 일봉 기준 실주문 전송 (확인 프롬프트)
+uv run mscr trade daemon --live  # 장중 실시간 감시·자동 집행 (아래 절)
+uv run mscr trade sync           # 체결 조회 후 기록·포트폴리오 반영
 ```
 
 안전장치:
 
 - 기본값은 dry-run이며, 실주문은 CLI `--live`(확인 프롬프트) 또는 화면의 `실주문 실행`(계좌·환경·대상 건수를 명시한 재확인)으로만 전송됩니다. 브로커 환경변수가 없으면 실주문 버튼과 API가 모두 막힙니다.
-- 청산(손절·1차·2차·트레일링) 주문은 실주문 모드에서 실제 보유 수량을 초과하면 주문하지 않고 `skipped`로 기록합니다. 모의 실행은 계획 자체의 수량 계산만 사용하므로 이 제한을 받지 않습니다.
-- 종목 일봉이 최신 수집일보다 오래되면 주문하지 않습니다(정지·상장폐지 종목 오주문 방지).
-- 이미 시도한 단계(진입/손절/1차/2차/트레일링)는 성공·모의·접수 상태면 다시 시도하지 않습니다. 거부·실패한 시도는 다음 실행에서 재시도됩니다.
+- 청산(손절·1차·2차·트레일링) 주문이 실제 보유 수량을 넘으면 **보유한 만큼으로 줄여서** 내보냅니다. 보유가 아예 없을 때만 `skipped`입니다. 손절을 "수량 불일치"로 통째로 거르는 쪽이 훨씬 위험하기 때문입니다. 어긋난 수량은 `mscr trade reconcile`로 확인하세요.
+- 종목 일봉이 최신 수집일보다 오래되면 주문하지 않습니다(정지·상장폐지 종목 오주문 방지). 실시간 모드에서는 이 대신 거래정지 플래그를 봅니다.
+- 이미 시도한 단계(진입/손절/1차/2차/트레일링)는 성공·모의·접수·취소 상태면 다시 시도하지 않습니다. 거부·실패한 시도는 다음 실행에서 재시도됩니다.
+- 주문 기록은 **환경별로 격리**됩니다. 같은 계획을 모의계좌에서 먼저 돌려도 실계좌의 진행 단계는 여전히 "진입 전"입니다.
 
-모든 시도는 `broker_orders` 테이블에 남습니다(`dry_run`·`submitted`·`partial`·`filled`·`rejected`·`failed`·`skipped`). `mscr trade sync`(또는 화면의 `체결 동기화`)가 체결을 확인하면 `trades` 테이블에 거래를 한 번만 기록하고, 포트폴리오 평가와 실현손익에 즉시 반영됩니다. 수수료·세금은 KIS 체결 조회에 포함되지 않으므로 0으로 기록되며 필요하면 포트폴리오 원장에서 수정하세요.
+모든 시도는 `broker_orders` 테이블에 남습니다(`dry_run`·`submitted`·`partial`·`filled`·`cancelled`·`rejected`·`failed`·`skipped`). `mscr trade sync`(또는 화면의 `체결 동기화`)가 체결을 확인하면 `trades` 테이블에 거래를 한 번만 기록하고, 포트폴리오 평가와 실현손익에 즉시 반영됩니다. 수수료·세금은 KIS 체결 조회에 포함되지 않으므로 0으로 기록되며 필요하면 포트폴리오 원장에서 수정하세요.
+
+### 실시간 자동 실행
+
+`mscr trade daemon`은 장중에 KIS 실시간체결가 웹소켓(`H0STCNT0`)을 물고 앉아 계획을 감시하다가, 조건을 충족하면 그 자리에서 주문을 냅니다. `--live` 없이 실행하면 시세만 받아 **무엇이 나갈 뻔했는지** 보여 주고 주문은 내지 않습니다.
+
+```bash
+uv run mscr trade daemon                    # 관찰 전용 — 실시간 판정만 흘려보냄
+uv run mscr trade daemon --live             # 실주문 (확인 프롬프트)
+uv run mscr trade daemon --live --plan 3    # 특정 계획만 감시
+uv run mscr trade daemon --live --no-stream # 웹소켓 없이 REST 폴링만
+uv run mscr trade daemon-status             # 하트비트 확인
+```
+
+장 시작 전에 띄우면 09:00까지 대기하고, 15:30이 되면 스스로 종료합니다(`--no-wait`를 주면 장 밖에서는 즉시 종료). 주말에는 대기 상태로만 있습니다. 공휴일은 따로 판정하지 않습니다 — 틱이 오지 않으므로 조용히 대기합니다.
+
+**판정 기준이 레그마다 다릅니다.**
+
+- **진입·익절은 현재가**로 봅니다. 스쳐 지나간 고가를 뒤늦게 쫓아가면 계획에 없던 자리에서 사고팔게 되기 때문입니다. 목표가를 찍고 되돌아왔다면 진입하지 않고 계속 기다립니다.
+- **손절·트레일링은 당일 고저**로 봅니다. 데몬이 잠깐 끊긴 사이 스쳐 간 이탈도 반드시 잡아야 하기 때문입니다. 지금 가격이 손절가 위로 돌아왔더라도 당일 저가가 손절가를 뚫었다면 즉시 청산합니다.
+- 트레일링 기준가는 일봉 극값과 **장중 세션 극값** 중 더 유리한 쪽입니다. 장중 신고가는 아직 일봉에 없기 때문입니다.
+
+**미체결은 레그에 따라 다르게 처리합니다**(기본 60초, `--unfilled-timeout`).
+
+- 진입 지정가가 붙지 않으면 **취소**합니다. 가격이 이미 떠났다는 뜻이고, 취소된 진입은 같은 날 다시 시도하지 않습니다. 부분체결분은 그대로 포지션으로 남고, 이후 익절 수량은 **실제 체결된 수량**을 기준으로 다시 나눕니다(10주 계획이 7주만 체결되면 4/3/3이 아니라 3/2/2).
+- 청산이 체결되지 않으면 **시장가로 정정**합니다. 손절·익절은 값을 깎아서라도 나가야 합니다. 정정하면 KIS가 새 주문번호를 주므로 원주문은 닫고 새 주문 행이 남습니다(`replaces_order_id`로 이어집니다).
+- 15:15부터는 신규 진입을 내지 않고, 남은 미체결 진입을 거둬들입니다.
+
+**연결이 끊기면 자동으로 강등·복구합니다.** 웹소켓이 끊기면 지수 백오프로 재접속하면서 그동안은 REST 현재가 폴링으로 감시를 이어 갑니다. 데몬이 다시 뜰 때는 스트림에 붙기 전에 REST로 현재가를 먼저 받아 **그사이 지나간 트리거를 집행**한 다음 정상 루프에 들어갑니다.
+
+구독은 KIS 제한에 따라 **40종목**까지입니다. 감시 대상은 미청산 계획의 종목이며, 청산이 끝나면 구독에서 빠집니다.
+
+#### 안전장치
+
+`트레이딩` → `자동 실행` 탭과 `mscr trade guard`에서 다룹니다.
+
+```bash
+uv run mscr trade guard                                   # 현재 상태
+uv run mscr trade guard --daily-entries 5                 # 하루 신규 진입 5건까지
+uv run mscr trade guard --daily-notional 10000000         # 하루 신규 진입 1천만원까지
+uv run mscr trade guard --no-require-paper                # 모의 선행 검증 해제
+uv run mscr trade guard --kill "변동성 급등"               # 킬스위치 ON
+uv run mscr trade guard --release                         # 킬스위치 OFF
+uv run mscr trade panic                                   # 킬스위치 + 미체결 전량 취소
+```
+
+- **킬스위치와 일일 한도는 신규 진입만 막습니다.** 손절·익절·트레일링 청산은 어떤 경우에도 막지 않습니다. 청산을 막는 안전장치는 안전장치가 아니기 때문입니다. 전부 멈추려면 데몬을 내리세요.
+- **일일 한도**는 신규 진입의 건수(기본 20건)와 금액(기본 무제한)입니다. 0이면 무제한이고, 청산 주문은 세지 않습니다.
+- **모의계좌 선행 검증**(기본 켜짐)은 실계좌 진입 전에 같은 계획이 `paper` 환경에서 실제로 체결된 적 있는지를 요구합니다. 검증 이력이 없으면 실계좌 진입이 `skipped`로 기록됩니다. 주문 기록이 환경별로 격리되므로, 모의에서 끝까지 돌려 봐도 실계좌 진행 단계는 그대로입니다.
+- **하트비트**: 데몬은 5초마다 상태를 `daemon_state`에 남깁니다. `running`으로 기록돼 있는데 하트비트가 30초 넘게 끊겼으면 프로세스가 죽은 것이고, `자동 실행` 탭과 `mscr trade daemon-status`가 이를 `응답 없음`으로 표시합니다.
+
+#### 데몬이 죽으면 손절도 멈춥니다
+
+KIS Open API에는 **조건부 스탑 주문이 없습니다.** 예약주문(`order-resv`)은 익영업일 장 시작 전 예약이라 장중 손절로 쓸 수 없고, 손절가에 지정가 매도를 미리 걸어 두는 우회도 불가능합니다(현재가보다 낮은 매도 지정가는 즉시 체결됩니다). 그래서 손절은 **데몬이 살아 있는 동안에만** 작동합니다.
+
+이 공백을 줄이려면 워치독으로 자동 재시작을 걸어 두세요. macOS라면 `~/Library/LaunchAgents/com.mscr.daemon.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.mscr.daemon</string>
+  <key>ProgramArguments</key>
+  <array><string>/opt/homebrew/bin/uv</string><string>run</string><string>--directory</string>
+    <string>/path/to/mscr</string><string>mscr</string><string>trade</string><string>daemon</string><string>--live</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/mscr-daemon.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mscr-daemon.err</string>
+</dict></plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.mscr.daemon.plist
+```
+
+무인 실행이라 확인 프롬프트를 띄울 터미널이 없으므로 `--live`에는 `--yes`를 함께 줍니다(위 `ProgramArguments`에 `<string>--yes</string>`를 추가하세요). `KeepAlive`가 프로세스를 되살리고, 되살아난 데몬은 REST로 현재 상태를 먼저 확인해 끊긴 사이 지나간 트리거를 집행합니다.
+
+그리고 재시작 사이의 공백에는 아무 보호도 없다는 점을 잊지 마세요. **최대 손실 금액은 여전히 보장이 아닙니다.**
 
 ## 상태 확인
 
@@ -390,6 +542,7 @@ uv run mscr doctor
 ```bash
 MSCR_HOME=/tmp/mscr-test uv run mscr ingest --days 30
 MSCR_HOME=/tmp/mscr-test uv run mscr doctor
+MSCR_HOME=/tmp/mscr-test uv run mscr doctor --market us
 ```
 
 `MSCR_REQUEST_DELAY_SEC`로 요청 간격을 조정할 수 있습니다. KRX/Naver 응답이 반복적으로 실패하면 1.0 이상으로 올리고 `--days`를 여러 번 나누어 실행하세요.

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, PlanCandidate, PlanProposal, PlanSimulation, TradePlan } from '../../lib/api';
 import { positionFromTradePlan, storePositionPlan } from '../../lib/position';
 import { SelectTicker } from '../../lib/nav';
-import { won } from '../../lib/format';
+import { money } from '../../lib/format';
 import { phaseLabel } from '../../lib/labels';
 import ViewHeader from '../ViewHeader';
 import TickerSearch from '../TickerSearch';
@@ -145,9 +145,9 @@ export default function PlansView({ onSelect }: { onSelect: SelectTicker }) {
           <code>{proposal.ticker}</code>
           <span className="badge" data-tone={proposal.side === 'sell' ? 'sell' : 'buy'}>{proposal.side === 'sell' ? '매도' : '매수'}</span>
           <span className="badge" data-tone="accent">{bindingLabel[proposal.binding] || proposal.binding}</span>
-          <span className="subtle">기준일 {proposal.as_of || '—'} · 최근 종가 {won(proposal.reference_close)} · ATR {won(proposal.atr)}({proposal.atr_pct.toFixed(2)}%) · 표본 {proposal.sample.observations.toLocaleString('ko-KR')}건 / {proposal.sample.horizon_days}봉 추적</span>
+          <span className="subtle">기준일 {proposal.as_of || '—'} · 최근 종가 {money(proposal.reference_close)} · ATR {money(proposal.atr)}({proposal.atr_pct.toFixed(2)}%) · 표본 {proposal.sample.observations.toLocaleString('ko-KR')}건 / {proposal.sample.horizon_days}봉 추적</span>
         </div>
-        {proposal.binding === 'max_loss' && <div className="subtle">최대 손실 금액이 수량을 결정하고 있어 최대 투자 금액 {won(proposal.max_investment)}은 실제로 제약이 되지 않습니다. 후보의 실투자액이 한도에 훨씬 못 미칠 수 있습니다.</div>}
+        {proposal.binding === 'max_loss' && <div className="subtle">최대 손실 금액이 수량을 결정하고 있어 최대 투자 금액 {money(proposal.max_investment)}은 실제로 제약이 되지 않습니다. 후보의 실투자액이 한도에 훨씬 못 미칠 수 있습니다.</div>}
         {proposal.warnings.length > 0 && <div className="msg autoplan-warnings" data-tone="warn">
           <b>확인하세요</b>
           <ul>{proposal.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
@@ -155,10 +155,10 @@ export default function PlansView({ onSelect }: { onSelect: SelectTicker }) {
         <div className="autoplan-reason"><span className="badge" data-tone="ok">권장</span><span>{proposal.recommendation_reason}</span></div>
         {/* 이 계획 하나의 손실 한도만 보면 포트폴리오 전체가 얼마나 남았는지는 안 보인다. 그 여유를 표 옆에 같이 둔다. */}
         <div className="grid grid--auto">
-          <div className="stat-card"><label>1회 위험 한도</label><strong>{won(proposal.risk_budget.per_trade_krw)}</strong><span className="subtle">총자산 대비 1회 위험 비율</span></div>
-          <div className="stat-card"><label>포트폴리오 히트 한도</label><strong>{won(proposal.risk_budget.heat_limit_krw)}</strong><span className="subtle">모든 계획의 손실 합계 상한</span></div>
-          <div className="stat-card"><label>남은 여유</label><strong className={proposal.risk_budget.remaining_krw > 0 ? undefined : 'down'}>{won(proposal.risk_budget.remaining_krw)}</strong><span className="subtle">이미 잡힌 위험을 뺀 나머지</span></div>
-          <div className="stat-card"><label>권장 손실 한도</label><strong>{won(proposal.risk_budget.suggested_max_loss)}</strong><span className="subtle">1회 한도와 남은 여유 중 작은 쪽</span></div>
+          <div className="stat-card"><label>1회 위험 한도</label><strong>{money(proposal.risk_budget.per_trade_krw)}</strong><span className="subtle">총자산 대비 1회 위험 비율</span></div>
+          <div className="stat-card"><label>포트폴리오 히트 한도</label><strong>{money(proposal.risk_budget.heat_limit_krw)}</strong><span className="subtle">모든 계획의 손실 합계 상한</span></div>
+          <div className="stat-card"><label>남은 여유</label><strong className={proposal.risk_budget.remaining_krw > 0 ? undefined : 'down'}>{money(proposal.risk_budget.remaining_krw)}</strong><span className="subtle">이미 잡힌 위험을 뺀 나머지</span></div>
+          <div className="stat-card"><label>권장 손실 한도</label><strong>{money(proposal.risk_budget.suggested_max_loss)}</strong><span className="subtle">1회 한도와 남은 여유 중 작은 쪽</span></div>
         </div>
         <div className="autoplan-scroll">
           <table className="table table--rows table--nowrap">
@@ -170,17 +170,17 @@ export default function PlansView({ onSelect }: { onSelect: SelectTicker }) {
               return <tr key={candidate.stop_atr_multiple} className={blocked ? 'blocked' : undefined} aria-selected={chosen} onClick={blocked ? undefined : () => setPicked(index)}>
                 <td><input type="radio" name="autoplan-candidate" checked={chosen} disabled={blocked} onChange={() => setPicked(index)} /></td>
                 <td>ATR {candidate.stop_atr_multiple}배{index === proposal.recommended && <span className="badge" data-tone="ok">권장</span>}</td>
-                <td className="num">{won(candidate.stop_price)}</td>
+                <td className="num">{money(candidate.stop_price)}</td>
                 <td className="num">{num(candidate.quantity)}주</td>
                 {blocked
                   ? <td className="reject subtle" colSpan={candidateColumns.length - 4}>{candidate.rejected}</td>
                   : <>
-                    <td className="num">{won(candidate.invested)}</td>
-                    <td className="num">{won(candidate.max_loss_krw)}</td>
+                    <td className="num">{money(candidate.invested)}</td>
+                    <td className="num">{money(candidate.max_loss_krw)}</td>
                     <td className="num">{pct(candidate.loss_budget_used)}</td>
                     <td className="num">{candidate.leg_quantities ? candidate.leg_quantities.join(' / ') : '—'}</td>
-                    <td className="num">{won(candidate.tp1_price)} <span className="subtle">{pct(candidate.tp1_ratio)}</span></td>
-                    <td className="num">{won(candidate.tp2_price)} <span className="subtle">{pct(candidate.tp2_ratio)}</span></td>
+                    <td className="num">{money(candidate.tp1_price)} <span className="subtle">{pct(candidate.tp1_ratio)}</span></td>
+                    <td className="num">{money(candidate.tp2_price)} <span className="subtle">{pct(candidate.tp2_ratio)}</span></td>
                     <td className="num">{pct(candidate.reach_tp1_prob)}</td>
                     <td className="num">{pct(candidate.reach_tp2_prob)}</td>
                     <td className={`num ${shortfall ? 'up' : 'ok'}`} title={`본전이 되려면 1차 목표 도달률 ${pct(candidate.breakeven_tp1_prob)} 이상 필요`}>{pct(candidate.breakeven_tp1_prob)}</td>
@@ -198,7 +198,7 @@ export default function PlansView({ onSelect }: { onSelect: SelectTicker }) {
         </ul>
         <div className="toolbar">
           <button type="button" className="btn btn--primary" disabled={!loadable} onClick={loadCandidate}>이 계획 불러오기</button>
-          <span className="subtle">{loadable && pickedCandidate ? `선택: ATR ${pickedCandidate.stop_atr_multiple}배 · ${num(pickedCandidate.quantity)}주 · 손절 ${won(pickedCandidate.stop_price)}` : '표에서 후보를 선택하세요.'}</span>
+          <span className="subtle">{loadable && pickedCandidate ? `선택: ATR ${pickedCandidate.stop_atr_multiple}배 · ${num(pickedCandidate.quantity)}주 · 손절 ${money(pickedCandidate.stop_price)}` : '표에서 후보를 선택하세요.'}</span>
         </div>
       </div>}
     </section>
@@ -245,15 +245,15 @@ export default function PlansView({ onSelect }: { onSelect: SelectTicker }) {
             <span className="badge" data-tone={plan.side === 'sell' ? 'sell' : 'buy'}>{plan.side === 'sell' ? '매도' : '매수'}</span>
             <code>{plan.ticker}</code>
             {plan.setup && <span className="chip" title="이 계획의 셋업 태그입니다. 복기에서 셋업별 성적으로 묶입니다.">{plan.setup}</span>}
-            <span className="subtle">{num(plan.quantity)}주 · {plan.order_type === 'market' ? '시장가' : `지정가 ${won(plan.limit_price)}`}</span>
+            <span className="subtle">{num(plan.quantity)}주 · {plan.order_type === 'market' ? '시장가' : `지정가 ${money(plan.limit_price)}`}</span>
             <span className="badge" data-tone={plan.enabled ? 'ok' : undefined}>{plan.enabled ? '사용' : '중지'}</span>
             <span className="badge">{evaluation ? phaseLabel[evaluation.phase] || evaluation.phase : '평가 없음'}</span>
           </div>
-          <p className="code-note">진입 {won(plan.entry_price)} · 손절 {won(plan.stop_price)} · 1차 {won(plan.tp1_price)}({pct(plan.tp1_ratio)}) · 2차 {won(plan.tp2_price)}({pct(plan.tp2_ratio)}) · 트레일링 {plan.tp3_trailing_pct}%</p>
+          <p className="code-note">진입 {money(plan.entry_price)} · 손절 {money(plan.stop_price)} · 1차 {money(plan.tp1_price)}({pct(plan.tp1_ratio)}) · 2차 {money(plan.tp2_price)}({pct(plan.tp2_ratio)}) · 트레일링 {plan.tp3_trailing_pct}%</p>
           <div className="plan-eval">
             <span className={evaluation?.triggered ? 'ok' : 'subtle'}>{evaluation ? (evaluation.next_leg ? `${evaluation.triggered ? '●' : '○'} 다음 동작: ${legLabel[evaluation.next_leg]}` : '○ 대기') : '평가 없음'}</span>
             <span className="subtle">{evaluation?.reason || ''}</span>
-            <span className="subtle">{evaluation?.as_of || '기준일 없음'} · 종가 {won(evaluation?.close ?? null)}</span>
+            <span className="subtle">{evaluation?.as_of || '기준일 없음'} · 종가 {money(evaluation?.close ?? null)}</span>
           </div>
           {plan.note && <div className="subtle">{plan.note}</div>}
           <div className="toolbar toolbar--tight"><button className="btn btn--ghost btn--sm" onClick={() => showOnChart(plan)} title="계획의 가격을 종목 상세 차트에 블록으로 띄웁니다">차트에서 보기</button><button className="btn btn--ghost btn--sm" onClick={() => edit(plan)}>편집</button><button className="btn btn--ghost btn--sm" onClick={() => toggleSimulate(plan)} title="진입이 실제로 체결된 적 없어도, 과거 구간의 일봉으로 진입→청산 전이를 재생해 봅니다.">{simPlan === plan.id ? '기간 시뮬레이션 닫기' : '기간 시뮬레이션'}</button><button className="btn btn--danger btn--sm" onClick={() => remove(plan)}>삭제</button></div>
@@ -274,7 +274,7 @@ export default function PlansView({ onSelect }: { onSelect: SelectTicker }) {
                 <tbody>{simResult.legs.map((leg, index) => <tr key={index}>
                   <td>{legLabel[leg.leg] || leg.leg}</td>
                   <td className="mono">{leg.date}</td>
-                  <td className="num">{won(leg.price)}</td>
+                  <td className="num">{money(leg.price)}</td>
                   <td className="num">{num(leg.quantity)}</td>
                 </tr>)}</tbody>
               </table>}

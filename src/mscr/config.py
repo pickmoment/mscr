@@ -6,7 +6,7 @@ from pathlib import Path
 MSCR_HOME = Path(os.environ.get("MSCR_HOME", "~/.mscr")).expanduser()
 DB_PATH = MSCR_HOME / "mscr.db"
 REQUEST_RETRIES = 3
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 DEFAULT_REQUEST_DELAY_SEC = 0.3
 
 

@@ -3,8 +3,9 @@ import { api, BarsResponse, ChartBar, ChartFreq, ChartIndicatorParams, ChartPlot
 import FormulaInput from './FormulaInput';
 import { chartSuggestions } from '../lib/suggest';
 import TickerChart from './TickerChart';
-import { ratio, won } from '../lib/format';
+import { ratio, money } from '../lib/format';
 import PositionPlanner from './PositionPlanner';
+import { marketInfo } from '../lib/market';
 import { defaultPlan, loadPositionPlans, POSITION_EVENT, PositionPlan, storePositionPlan } from '../lib/position';
 import { MeasureMode } from '../lib/measure';
 import { SelectTicker } from '../lib/nav';
@@ -166,12 +167,12 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   const removePlot = (id: string) => setPlots(current => current.filter(item => item.id !== id));
   // 우측 시세 표. 세 번째 원소는 설명이 필요한 항목의 툴팁.
   const quoteRows: [string, string, string?][] = [
-    ['시가', won(detail.quote.open as number)],
-    ['고가', won(detail.quote.high as number)],
-    ['저가', won(detail.quote.low as number)],
+    ['시가', money(detail.quote.open as number)],
+    ['고가', money(detail.quote.high as number)],
+    ['저가', money(detail.quote.low as number)],
     ['거래량', Number(detail.quote.volume || 0).toLocaleString()],
-    ['거래대금', won(detail.quote.value as number)],
-    ['시가총액', won(detail.fundamental.market_cap)],
+    ['거래대금', money(detail.quote.value as number)],
+    ['시가총액', money(detail.fundamental.market_cap)],
     ['PER', ratio(detail.fundamental.per)],
     ['PBR', ratio(detail.fundamental.pbr)],
     ['가중수익률', detail.quote.weighted_return == null ? '—' : `${Number(detail.quote.weighted_return).toFixed(1)}%`, '최근 3·6·9·12개월 누적수익률 가중평균(0.4/0.2/0.2/0.2)'],
@@ -185,6 +186,8 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
   // 차트를 아직 못 불러왔을 때만 시세 종가로 대체한다.
   const basePrice = detail.position?.avg_cost || viewportLastBar?.close || Number(detail.quote.close) || 0;
   const freshPlan = () => defaultPlan(basePrice, detail.kind, detail.position?.quantity ?? 0);
+  // alpha-square 분봉과 매매 계획은 국내 전용이다. 미국 모드에서는 버튼 자체를 내린다.
+  const krOnly = marketInfo().key === 'kr';
   const toggleWatch = async () => {
     try {
       if (watched && listId != null) await api.deleteWatchlistItem(listId, ticker);
@@ -208,7 +211,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
         <a className="mono muted" href={`https://stock.naver.com/domestic/stock/${detail.ticker}/price`} target="_blank" rel="noopener noreferrer">{detail.ticker}</a>
         <span className="quote-tag">{detail.kind.toUpperCase()} · {detail.market || detail.category || 'ETF'}</span>
       </div>
-      <strong className="quote-price mono">{won(detail.quote.close as number)}</strong>
+      <strong className="quote-price mono">{money(detail.quote.close as number)}</strong>
       <strong className={`quote-change ${(detail.quote.change_pct as number) >= 0 ? 'up' : 'down'}`}>{detail.quote.change_pct == null ? '—' : `${Number(detail.quote.change_pct).toFixed(2)}%`}</strong>
       <div className="toolbar toolbar--tight push">
         {watchMessage && <span className="subtle">{watchMessage}</span>}
@@ -217,7 +220,7 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
       </div>
     </div>
     <div className="panel chart-box">
-      <div className="toolbar"><div className="segmented">{(['local', 'alphasquare'] as const).map(item => <button key={item} className="btn" aria-pressed={source === item} onClick={() => setSource(item)} title={item === 'alphasquare' ? 'alphasquare.co.kr 비공식 API로 분봉까지 봅니다(수정주가 아님, 참고용)' : '로컬 DB(일봉 EOD) 기준'}>{item === 'local' ? '로컬' : '실시간'}</button>)}</div><div className="segmented">{source === 'local' ? ['3m', '6m', '1y', '3y', 'max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>) : FREQ_OPTIONS.map(option => <button key={option.value} className="btn" aria-pressed={freq === option.value} onClick={() => setFreq(option.value)}>{option.label}</button>)}</div>{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" onClick={loadChart} title="alpha-square에서 최신 캔들을 다시 불러옵니다(자동 갱신 없음)">새로고침</button>}{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" disabled={count >= ALPHASQUARE_MAX_COUNT} onClick={() => setCount(current => Math.min(ALPHASQUARE_MAX_COUNT, current + ALPHASQUARE_COUNT_STEP))} title={count >= ALPHASQUARE_MAX_COUNT ? `한 번에 가져올 수 있는 최대 봉수(${ALPHASQUARE_MAX_COUNT})에 닿았습니다` : 'alpha-square에서 더 과거의 캔들을 이어붙여 불러옵니다'}>이전 데이터 더보기</button>}<button className="btn btn--ghost" aria-pressed={logScale} onClick={() => setLogScale(current => !current)} title="가격 축을 로그 눈금으로 바꿉니다 — 등락률이 같으면 같은 높이로 보여 오래된 구간과 최근 구간의 움직임을 나란히 비교할 수 있습니다. 거래량과 보조판은 일반 눈금 그대로입니다.">로그</button><button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button><button className="btn btn--ghost" aria-pressed={measure === 'bars'} onClick={() => setMeasure(current => current === 'bars' ? 'off' : 'bars')} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">봉구간 측정</button><button className="btn btn--ghost" aria-pressed={measure === 'lines'} onClick={() => setMeasure(current => current === 'lines' ? 'off' : 'lines')} title="차트에서 가격 두 곳을 클릭하면 가로선 두 개를 긋고 그 상하폭을 금액·비율로 표시합니다">선구간 측정</button><span className="subtle push" title={source === 'alphasquare' ? 'alphasquare.co.kr의 비공식 내부 API입니다 — 공식 데이터가 아니므로 참고용으로만 활용하세요. 수정주가가 아니며, 자동 갱신 없이 새로고침 버튼으로만 다시 불러옵니다.' : undefined}>{source === 'alphasquare' ? `실시간(비공식) · ${FREQ_OPTIONS.find(option => option.value === freq)?.label ?? freq}` : chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
+      <div className="toolbar">{krOnly && <div className="segmented">{(['local', 'alphasquare'] as const).map(item => <button key={item} className="btn" aria-pressed={source === item} onClick={() => setSource(item)} title={item === 'alphasquare' ? 'alphasquare.co.kr 비공식 API로 분봉까지 봅니다(수정주가 아님, 참고용)' : '로컬 DB(일봉 EOD) 기준'}>{item === 'local' ? '로컬' : '실시간'}</button>)}</div>}<div className="segmented">{source === 'local' ? ['3m', '6m', '1y', '3y', 'max'].map(item => <button key={item} className="btn" aria-pressed={range === item} onClick={() => setRange(item)}>{item}</button>) : FREQ_OPTIONS.map(option => <button key={option.value} className="btn" aria-pressed={freq === option.value} onClick={() => setFreq(option.value)}>{option.label}</button>)}</div>{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" onClick={loadChart} title="alpha-square에서 최신 캔들을 다시 불러옵니다(자동 갱신 없음)">새로고침</button>}{source === 'alphasquare' && <button className="btn btn--ghost btn--sm" disabled={count >= ALPHASQUARE_MAX_COUNT} onClick={() => setCount(current => Math.min(ALPHASQUARE_MAX_COUNT, current + ALPHASQUARE_COUNT_STEP))} title={count >= ALPHASQUARE_MAX_COUNT ? `한 번에 가져올 수 있는 최대 봉수(${ALPHASQUARE_MAX_COUNT})에 닿았습니다` : 'alpha-square에서 더 과거의 캔들을 이어붙여 불러옵니다'}>이전 데이터 더보기</button>}<button className="btn btn--ghost" aria-pressed={logScale} onClick={() => setLogScale(current => !current)} title="가격 축을 로그 눈금으로 바꿉니다 — 등락률이 같으면 같은 높이로 보여 오래된 구간과 최근 구간의 움직임을 나란히 비교할 수 있습니다. 거래량과 보조판은 일반 눈금 그대로입니다.">로그</button>{krOnly && <button className="btn btn--ghost" aria-pressed={!!plan} disabled={!plan && basePrice <= 0} onClick={() => savePlan(plan ? null : freshPlan())} title="진입·손절·청산 가격을 차트에 블록으로 그립니다">포지션</button>}<button className="btn btn--ghost" aria-pressed={measure === 'bars'} onClick={() => setMeasure(current => current === 'bars' ? 'off' : 'bars')} title="차트에서 봉 두 개를 클릭하면 그 사이 구간을 봉 개수·가격 변화로 표시합니다">봉구간 측정</button><button className="btn btn--ghost" aria-pressed={measure === 'lines'} onClick={() => setMeasure(current => current === 'lines' ? 'off' : 'lines')} title="차트에서 가격 두 곳을 클릭하면 가로선 두 개를 긋고 그 상하폭을 금액·비율로 표시합니다">선구간 측정</button><span className="subtle push" title={source === 'alphasquare' ? 'alphasquare.co.kr의 비공식 내부 API입니다 — 공식 데이터가 아니므로 참고용으로만 활용하세요. 수정주가가 아니며, 자동 갱신 없이 새로고침 버튼으로만 다시 불러옵니다.' : undefined}>{source === 'alphasquare' ? `실시간(비공식) · ${FREQ_OPTIONS.find(option => option.value === freq)?.label ?? freq}` : chart?.adjusted ? '수정주가' : 'KRX 원주가'} · {chart?.bars.length || 0} bars</span></div>
       <div className="chart-canvas"><TickerChart data={chart} light={light} plan={plan} kind={detail.kind} onPlanChange={savePlan} measure={measure} plotStyles={plots} logScale={logScale} onLastBarChange={setViewportLastBar} /></div>
     </div></div><aside className="panel sidebar scroll">{plan && <PositionPlanner plan={plan} ticker={detail.ticker} name={detail.name} kind={detail.kind} onChange={savePlan} onReset={() => savePlan(freshPlan())} onClose={() => savePlan(null)} />}<div className="toolbar"><div className="section-title">지표 설정</div><button className="btn btn--quiet btn--sm push" aria-expanded={showParams} onClick={() => setShowParams(current => !current)}>{showParams ? '숨기기' : '표시'}</button></div>
     {showParams && <>
@@ -243,5 +246,5 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
       {plotErrors[spec.id] && <p className="msg" data-tone="error">{plotErrors[spec.id]}</p>}
     </div>)}
     </>}
-    <div className="section-title">시세</div><table className="table table--kv"><tbody>{quoteRows.map(([label, value, hint]) => <tr key={label}><td title={hint}>{label}</td><td>{value}</td></tr>)}</tbody></table>{detail.position && <><div className="section-title">보유</div><div className="msg">{detail.position.quantity}주 · 평균 {won(detail.position.avg_cost)}<br />평가손익 <b>{won(detail.position.unrealized)}</b></div></>}</aside></div>;
+    <div className="section-title">시세</div><table className="table table--kv"><tbody>{quoteRows.map(([label, value, hint]) => <tr key={label}><td title={hint}>{label}</td><td>{value}</td></tr>)}</tbody></table>{detail.position && <><div className="section-title">보유</div><div className="msg">{detail.position.quantity}주 · 평균 {money(detail.position.avg_cost)}<br />평가손익 <b>{money(detail.position.unrealized)}</b></div></>}</aside></div>;
 }
