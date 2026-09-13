@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from . import market, market_stats, portfolio, signals, watchlist
+from . import chartread, market, market_stats, portfolio, signals, watchlist
 from .config import DB_PATH, MSCR_HOME, SCHEMA_VERSION
 from .db import db_session
 from .dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCALAR_NAMES, SCREEN_NAMES, SERIES_NAMES, custom_definitions, ticker_snapshot, validate_formula
@@ -151,6 +151,83 @@ def bars(ticker: str, days: int = DEFAULT_BARS) -> dict[str, Any]:
             f"SELECT date,open,high,low,close,volume,value,halted FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date DESC LIMIT ?",
             (code, max(1, min(int(days), 2000)))).fetchall()
     return {"ticker": code, "currency": market.active().currency, "count": len(rows), "bars": [dict(row) for row in reversed(rows)]}
+
+
+BAR_COLUMNS = "date,open,high,low,close,volume,value,halted"
+NOT_NULL = "open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND volume IS NOT NULL"
+
+
+def _local_bars(db, code: str, needed: int) -> tuple[list[dict[str, Any]], bool]:
+    """화면 차트와 같은 가격 계열을 고른다 — 한국은 캐시된 수정주가가 창을 덮을 때만 그걸 쓴다.
+
+    `source='adjusted'` 행은 사용자가 화면에서 그 종목 차트를 연 적이 있을 때만 쌓인다. 여기서는
+    KRX를 새로 호출하지 않고 있는 것만 본다 — 조회 명령이 조용히 외부 API를 때리면 안 된다.
+    미국(Massive) 일봉은 이미 수정주가라 스냅샷이 곧 수정주가다.
+    """
+    snapshot = [dict(row) for row in db.execute(
+        f"SELECT {BAR_COLUMNS} FROM daily_bars WHERE ticker=? AND source='{bar_source()}' ORDER BY date DESC LIMIT ?",
+        (code, needed)).fetchall()]
+    if market.active().region != market.KR.region:
+        return snapshot, bool(snapshot)
+    adjusted = [dict(row) for row in db.execute(
+        f"SELECT {BAR_COLUMNS} FROM daily_bars WHERE ticker=? AND source='adjusted' AND {NOT_NULL} ORDER BY date DESC LIMIT ?",
+        (code, needed)).fetchall()]
+    if adjusted and snapshot and len(adjusted) >= len(snapshot) and adjusted[0]["date"] == snapshot[0]["date"]:
+        return adjusted, True
+    return snapshot, False
+
+
+def _alphasquare_bars(db, code: str, freq: str, needed: int) -> pd.DataFrame:
+    """alpha-square 비공식 API에서 캔들을 직접 받는다 — 화면의 `실시간` 탭과 같은 경로다.
+
+    로컬 일봉과 다른 점이 셋이다. (1) 장중인 오늘 봉이 들어온다, (2) 분봉을 볼 수 있다,
+    (3) **수정주가가 아니다**. 셋째 때문에 분할·병합 지점이 그대로 절벽으로 남는데, 화면은 사람이
+    그 절벽을 눈으로 보고 걸러 낸다. 말로 옮길 때는 그럴 수 없으므로 로컬과 같은 전처리를 걸어
+    단절 이전을 잘라내고 `price_jump_flag`로 알린다.
+    """
+    from .providers.alphasquare import CANDLE_BARS_MAX, CANDLE_FREQS, AlphaSquareProvider
+
+    if freq not in CANDLE_FREQS:
+        raise ValueError(f"지원하지 않는 주기입니다: {freq} (가능: {', '.join(CANDLE_FREQS)})")
+    frame = AlphaSquareProvider(db).candles(code, freq, count=min(needed, CANDLE_BARS_MAX))
+    if frame.empty:
+        raise ValueError(f"alpha-square에서 캔들을 받지 못했습니다: {code} ({freq})")
+    if freq != "day":
+        # 분봉 시각은 장 시간대 벽시계를 UTC epoch초로 인코딩해 온다(화면이 그대로 읽게). 되돌린다.
+        frame = frame.assign(date=pd.to_datetime(frame["date"], unit="s").dt.strftime("%Y-%m-%d %H:%M"))
+    return frame.assign(value=frame["close"] * frame["volume"], halted=0)
+
+
+def chart(ticker: str, window: int = chartread.DEFAULT_WINDOW, source: str = "local", freq: str = "day",
+          swing_factor: float = chartread.SWING_FACTOR, with_sketch: bool = False) -> dict[str, Any]:
+    """차트를 그리지 않고 설명할 수 있게 만든 구조 요약 — 구간·스윙·수평선·사건.
+
+    같은 250봉을 `bars`로 주면 40KB인데 여기서는 4KB 안팎이고, 줄어든 대신 "3개월 횡보 뒤
+    6월부터 상승" 같은 시간 축 정보가 남는다. 무엇을 읽을지는 `chartread`의 정의가 정한다 —
+    정의하지 않은 모양은 여기 나오지 않는다.
+
+    `source`는 화면 차트의 `로컬`/`실시간` 토글과 같다. `local`은 로컬 DB 일봉(EOD, 오프라인),
+    `alphasquare`는 비공식 API로 분봉까지 보되 네트워크를 탄다.
+    """
+    code = market.clean_ticker(ticker)
+    if source not in {"local", "alphasquare"}:
+        raise ValueError(f"지원하지 않는 원천입니다: {source} (가능: local, alphasquare)")
+    needed = max(1, int(window)) + chartread.WARMUP
+    with db_session() as db:
+        item = db.execute("SELECT name,kind,market FROM instruments WHERE ticker=? AND region=?", (code, market.region())).fetchone()
+        if not item:
+            raise ValueError(f"등록되지 않은 종목입니다: {code} (현재 시장: {market.active().label})")
+        if source == "alphasquare":
+            frame, adjusted = _alphasquare_bars(db, code, freq, needed), False
+        else:
+            rows, adjusted = _local_bars(db, code, needed)
+            if not rows:
+                raise ValueError(f"일봉이 없습니다: {code} — 먼저 `mscr ingest`로 수집하세요.")
+            frame = pd.DataFrame(list(reversed(rows)))
+    return {"ticker": code, "name": item["name"], "kind": item["kind"], "market": item["market"],
+            "currency": market.active().currency, "source": source,
+            "freq": freq if source == "alphasquare" else "day", "adjusted": adjusted} | chartread.read(
+        frame, window=int(window), swing_factor=float(swing_factor), with_sketch=with_sketch)
 
 
 # --- 스크리너 -----------------------------------------------------------

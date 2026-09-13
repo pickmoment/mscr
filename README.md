@@ -544,13 +544,80 @@ uv run mscr query screen -m us --limit 10 \
   -f "close / rolling_max(high, 250) - 1 >= -0.02 and sma(value, 20) > 200000000" \
   --sort "sma(value, 20)"
 uv run mscr query quote AAPL -m us                  # 시세·재무·보유
+uv run mscr query chart AAPL -m us --sketch         # 차트를 말로 옮긴 구조 요약
 uv run mscr query watchlist-add AAPL --list 관심 -m us
 ```
 
-읽기는 `status` `markets` `fields` `search` `quote` `bars` `screen` `presets` `stats`
-`brief` `signals` `signal-diff` `watchlists` `watchlist` `portfolio`, 쓰기는
+읽기는 `status` `markets` `fields` `search` `quote` `bars` `chart` `screen` `presets`
+`stats` `brief` `signals` `signal-diff` `watchlists` `watchlist` `portfolio`, 쓰기는
 `preset-save` `preset-delete` `watchlist-create` `watchlist-add` `watchlist-remove`입니다.
 모든 명령이 `--market`(`-m`)을 받고, 생략하면 저장된 기본 모드를 씁니다.
+
+### 차트 읽기
+
+`query chart`는 화면을 보지 않고도 차트를 설명할 수 있게 캔들을 구조로 요약합니다. 봉을 그대로
+주면(`bars` 250봉 ≈ 40KB) 형태가 읽히지 않고, 한 시점 지표만 주면 "언제부터"가 빠집니다. 같은
+창을 4KB 안팎으로 줄이면서 시간 축을 남깁니다.
+
+```json
+{
+  "source": "local", "freq": "day", "adjusted": true, "as_of": "2026-09-10",
+  "position": { "close": 269000.0, "from_hi250": -0.2817, "atr14_pct": 0.0545, "rsi14": 53.7 },
+  "trend":    { "state": "혼조", "ma_order": "60>5>20>120", "since": "2026-07-02" },
+  "segments": [
+    { "from": "2026-03-31", "to": "2026-06-19", "bars": 55, "kind": "상승",
+      "change": 1.1172, "range_pct": 1.2425, "vol_trend": "증가" },
+    { "from": "2026-06-19", "to": "2026-07-29", "bars": 28, "kind": "하락",
+      "change": -0.411, "range_pct": 0.9794, "vol_trend": "유지" }
+  ],
+  "levels":   [ { "price": 287750.0, "role": "저항", "touches": 2, "last": "2026-08-18" } ],
+  "box":      { "exists": false, "bars": 14, "width_pct": 0.1338, "position_in_box": 0.7222 },
+  "events":   [ { "date": "2026-07-31", "kind": "갭상승", "gap_pct": 0.2415, "filled": false } ],
+  "sketch":   { "line": "▁▁▁▁▁▂▂▂▂▂▂▂▂▂▂▂▂▂▂▃▃▃▃▃▃▃▄▄▃▄▄▄▄▄▄▄▅▅▅▆▆▆▇▇▆█▇▇▇▆▅▆▄▅▅▆▅▅▅▆" },
+  "resolution": { "swing_factor": 3.0, "swing_threshold": 0.1635, "box_width": 0.1363, "swings_found": 12 }
+}
+```
+
+- `segments`는 창 전체를 빈틈없이 덮고, **라벨은 언제나 그 구간의 `change`와 같은 방향**입니다.
+  구간 경계는 ATR 배수 되돌림으로 확정한 스윙 고·저점이고, 고점·저점이 함께 밀려나는 동안을
+  한 구간(Dow)으로 봅니다. 제 폭에 견줘 순이동이 작은 구간은 `횡보`가 됩니다.
+- `swings`의 마지막 극값은 `confirmed: false`일 수 있습니다 — 되돌림을 아직 못 본 진행 중인 파동입니다.
+- 스윙이 아예 없는 조용한 꼬리는 앞 구간에 붙습니다. 그래서 멈춰 선 상태는 `segments`가 아니라
+  **`box`가 말합니다** — 두 값을 함께 읽어야 합니다.
+- 이평선은 화면 차트와 같은 5·20·60에 120을 더해 봅니다. 화면에 없는 선으로 추세를 말하면
+  눈으로 확인할 수 없기 때문입니다.
+- **정의한 것만 읽습니다.** 삼각수렴·헤드앤숄더 같은 이름은 계산하지 않습니다.
+
+#### 원천과 주기
+
+```bash
+uv run mscr query chart 005930 -m kr                                     # 로컬 일봉(기본)
+uv run mscr query chart 005930 -m kr --source alphasquare                # 오늘 봉까지 포함한 일봉
+uv run mscr query chart 005930 -m kr --source alphasquare --freq minute-5 --window 200
+```
+
+`--source`는 화면 차트의 `로컬`/`실시간` 토글과 같습니다.
+
+| | `local` (기본) | `alphasquare` |
+|---|---|---|
+| 주기 | 일봉만 | `day` · `minute-1/3/5/15/30/60` |
+| 최신성 | 마지막 수집일(EOD) | 장중 오늘 봉까지 |
+| 가격 | 한국은 캐시된 수정주가가 있으면 그것, 없으면 원주가 / 미국은 수정주가 | 수정주가 아님 |
+| 비용 | 로컬 DB만 읽음 | 비공식 외부 API 호출 |
+
+`adjusted` 필드가 어느 쪽을 읽었는지 알려 줍니다. 한국 모드의 `local`은 화면에서 그 종목 차트를
+열 때 캐시되는 `adjusted` 일봉이 창을 덮을 때만 그걸 쓰고, 여기서 KRX를 새로 호출하지는 않습니다.
+
+alpha-square는 수정주가가 아니라 분할·병합 지점이 절벽으로 남습니다. 화면은 사람이 그 절벽을 눈으로
+걸러 내지만 말로 옮길 때는 그럴 수 없으므로, 로컬과 같은 전처리로 단절 이전을 잘라내고
+`price_jump_flag`로 알립니다. 잘라낸 뒤 20봉이 안 남으면 판독을 거절합니다.
+
+#### 판독 해상도
+
+`--swing-factor`(기본 3.0)는 스윙 확정에 필요한 되돌림을 ATR14 배수로 정합니다. 이 값이 곧 얼마나
+거칠게 읽을지입니다 — NAVER 250봉 기준으로 1.5는 구간 30개, 3.0은 9개, 5.0은 5개가 나옵니다.
+문턱은 전부 ATR이나 창 폭에 견줘 정하므로 일봉과 5분봉에 같은 값을 쓸 수 있고, 실제로 적용된
+절대값은 `resolution.swing_threshold`·`box_width`로 나옵니다.
 
 ### 스킬 설치
 

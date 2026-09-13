@@ -683,6 +683,24 @@ def query_bars(ticker: str = typer.Argument(...), days: int = typer.Option(120, 
     _emit(market, lambda: query.bars(ticker, days))
 
 
+@query_app.command("chart")
+def query_chart(
+    ticker: str = typer.Argument(...),
+    window: int = typer.Option(250, "--window", min=20, max=2000, help="구조를 읽을 창(봉 수)."),
+    source: str = typer.Option("local", "--source", help="local(로컬 DB 일봉) 또는 alphasquare(비공식 API, 분봉·오늘 봉 포함)."),
+    freq: str = typer.Option("day", "--freq", help="alphasquare 주기: day, minute-1/3/5/15/30/60. local은 항상 일봉입니다."),
+    swing_factor: float = typer.Option(3.0, "--swing-factor", min=0.5, max=10.0,
+                                       help="스윙 확정에 필요한 되돌림(ATR14 배수). 낮추면 잔파동까지, 올리면 큰 줄기만 봅니다."),
+    sketch: bool = typer.Option(False, "--sketch", help="창을 60칸으로 줄인 문자 캔들을 함께 냅니다."),
+    market: str = MARKET_OPTION,
+) -> None:
+    """Chart structure in words: trend segments, swings, levels, box and one-bar events."""
+    from . import query
+
+    _emit(market, lambda: query.chart(ticker, window=window, source=source, freq=freq,
+                                      swing_factor=swing_factor, with_sketch=sketch))
+
+
 @query_app.command("screen")
 def query_screen(
     formula: str = typer.Option(None, "--formula", "-f", help="불리언 스크린 수식. `mscr query fields`로 쓸 수 있는 이름을 먼저 확인하세요."),
