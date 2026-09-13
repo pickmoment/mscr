@@ -532,6 +532,54 @@ launchctl load ~/Library/LaunchAgents/com.mscr.daemon.plist
 
 그리고 재시작 사이의 공백에는 아무 보호도 없다는 점을 잊지 마세요. **최대 손실 금액은 여전히 보장이 아닙니다.**
 
+## AI 에이전트로 쓰기
+
+`mscr query` 계열 명령은 사람이 읽는 표 대신 **JSON 한 덩어리**를 내보냅니다. 실패도
+`{"error": "..."}` + 종료코드 1이라 파싱만 하면 됩니다. 서버를 띄울 필요가 없습니다.
+
+```bash
+uv run mscr query status -m us                      # 시장 모드·데이터 기준일·종목 수
+uv run mscr query fields -m us                      # 수식에 쓸 수 있는 이름·함수
+uv run mscr query screen -m us --limit 10 \
+  -f "close / rolling_max(high, 250) - 1 >= -0.02 and sma(value, 20) > 200000000" \
+  --sort "sma(value, 20)"
+uv run mscr query quote AAPL -m us                  # 시세·재무·보유
+uv run mscr query watchlist-add AAPL --list 관심 -m us
+```
+
+읽기는 `status` `markets` `fields` `search` `quote` `bars` `screen` `presets` `stats`
+`brief` `signals` `signal-diff` `watchlists` `watchlist` `portfolio`, 쓰기는
+`preset-save` `preset-delete` `watchlist-create` `watchlist-add` `watchlist-remove`입니다.
+모든 명령이 `--market`(`-m`)을 받고, 생략하면 저장된 기본 모드를 씁니다.
+
+### 스킬 설치
+
+에이전트에게 위 명령들의 사용법을 알려 주는 `SKILL.md`가 패키지에 함께 들어 있습니다.
+쓰는 도구와 범위를 골라 설치합니다.
+
+```bash
+uv run mscr skill install                        # Claude Code · 현재 프로젝트(.claude/skills/mscr/)
+uv run mscr skill install -t agents              # .agents 규약 · 현재 프로젝트(.agents/skills/mscr/)
+uv run mscr skill install -t all -s global       # 둘 다 · 홈 디렉터리(~/.claude, ~/.agents)
+uv run mscr skill status                         # 타겟×범위 네 자리의 설치 상태
+uv run mscr skill show --scope global            # 설치될 문서를 미리 봅니다
+uv run mscr skill remove -t all                  # 설치 해제
+```
+
+| 타겟 | 프로젝트 | 글로벌 |
+|---|---|---|
+| `claude` (Claude Code) | `./.claude/skills/mscr/` | `~/.claude/skills/mscr/` |
+| `agents` (.agents 규약) | `./.agents/skills/mscr/` | `~/.agents/skills/mscr/` |
+
+설치 시점에 실행 명령이 문서에 박힙니다 — 프로젝트 범위는 `uv run mscr`, 글로벌 범위는
+`mscr` 실행 파일의 절대 경로입니다(데이터베이스가 `~/.mscr`에 있어 어느 디렉터리에서든
+동작합니다). 이미 있는 문서와 내용이 다르면 덮어쓰지 않고 `--force`를 요구하며, 같은 내용이면
+아무것도 하지 않습니다. `--dry-run`으로 먼저 확인할 수 있습니다.
+
+설치한 뒤 "이런 조건의 종목 찾아줘", "이 종목 어때", "관심종목에 담아줘" 같은 요청을 하면
+에이전트가 위 명령들로 답합니다(새로 설치한 스킬은 세션을 다시 시작해야 인식됩니다).
+매매 계획·주문은 스킬 범위 밖입니다 — 실제 주문은 화면이나 `mscr trade`로만 냅니다.
+
 ## 상태 확인
 
 ```bash

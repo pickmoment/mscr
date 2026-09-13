@@ -520,6 +520,327 @@ def brief(
     typer.echo(render(build(date)))
 
 
+skill_app = typer.Typer(add_completion=False, no_args_is_help=True,
+                        help="Install the mscr skill document so AI agents can drive `mscr query`.")
+app.add_typer(skill_app, name="skill")
+
+SKILL_TARGET_OPTION = typer.Option(["claude"], "--target", "-t", help="claude(Claude Code) · agents(.agents 규약) · all. 반복 지정할 수 있습니다.")
+SKILL_SCOPE_OPTION = typer.Option("project", "--scope", "-s", help="project(현재 디렉터리) 또는 global(홈 디렉터리).")
+SKILL_ROOT_OPTION = typer.Option(None, "--path", help="프로젝트 범위에서 쓸 루트 디렉터리(기본: 현재 디렉터리).")
+
+_SKILL_STATUS_LABEL = {
+    "installed": "설치함", "updated": "갱신함", "unchanged": "그대로(동일)", "conflict": "건너뜀(내용이 달라 --force 필요)",
+    "dry_run": "적용 예정", "removed": "삭제함", "missing": "없음", "absent": "미설치", "modified": "설치됨(수정된 파일)",
+}
+
+
+def _skill_report(rows: list[dict], as_json: bool, note: str | None = None) -> None:
+    from . import query
+
+    if as_json:
+        typer.echo(query.dumps(rows))
+        return
+    for row in rows:
+        typer.echo(f"{row['target']:<7} {row['scope']:<7} {_SKILL_STATUS_LABEL.get(row['status'], row['status']):<28} {row['path']}")
+    if note and any(row["status"] in ("installed", "updated") for row in rows):
+        typer.echo(note)
+
+
+def _skill_call(action, targets, scope, root, as_json: bool, note: str | None = None, **kwargs) -> None:
+    from . import skill
+
+    try:
+        rows = action(targets=targets, scope=scope, root=root, **kwargs)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    _skill_report(rows, as_json, note)
+    if any(row["status"] == "conflict" for row in rows):
+        raise typer.Exit(code=1)
+
+
+@skill_app.command("install")
+def skill_install(
+    target: list[str] = SKILL_TARGET_OPTION,
+    scope: str = SKILL_SCOPE_OPTION,
+    path: str = SKILL_ROOT_OPTION,
+    force: bool = typer.Option(False, "--force", help="내용이 다른 기존 파일도 덮어씁니다."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="파일을 쓰지 않고 결과만 보여줍니다."),
+    as_json: bool = typer.Option(False, "--json", help="결과를 JSON으로 내보냅니다."),
+) -> None:
+    """Write SKILL.md into the chosen agent skill directories."""
+    from . import skill
+
+    _skill_call(skill.install, target, scope, path, as_json,
+                note="새로 설치한 스킬은 에이전트 세션을 다시 시작해야 인식됩니다.", force=force, dry_run=dry_run)
+
+
+@skill_app.command("remove")
+def skill_remove(
+    target: list[str] = SKILL_TARGET_OPTION,
+    scope: str = SKILL_SCOPE_OPTION,
+    path: str = SKILL_ROOT_OPTION,
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Delete the installed SKILL.md from the chosen locations."""
+    from . import skill
+
+    _skill_call(skill.remove, target, scope, path, as_json, dry_run=dry_run)
+
+
+@skill_app.command("status")
+def skill_status(path: str = SKILL_ROOT_OPTION, as_json: bool = typer.Option(False, "--json")) -> None:
+    """Show where the skill is installed (target x scope)."""
+    from . import skill
+
+    _skill_report(skill.status(root=path), as_json)
+
+
+@skill_app.command("show")
+def skill_show(scope: str = SKILL_SCOPE_OPTION) -> None:
+    """Print the rendered SKILL.md that would be installed."""
+    from . import skill
+
+    try:
+        typer.echo(skill.render(scope))
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
+query_app = typer.Typer(add_completion=False, no_args_is_help=True,
+                        help="JSON output for scripts and AI agents. Every command prints one JSON object.")
+app.add_typer(query_app, name="query")
+app.add_typer(query_app, name="q", hidden=True)
+
+MARKET_OPTION = typer.Option(None, "--market", "-m", help=MARKET_HELP)
+
+
+def _emit(market_key: str | None, build) -> None:
+    """조회 결과를 JSON 한 덩어리로 내보낸다. 실패도 JSON({"error": …})으로 알리고 종료코드 1을 준다 —
+    호출부(에이전트)가 표준출력만 파싱하면 되도록."""
+    from . import query
+
+    _use_market(market_key)
+    try:
+        payload = build()
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        typer.echo(query.dumps({"error": str(exc)}))
+        raise typer.Exit(code=1) from exc
+    typer.echo(query.dumps(payload))
+
+
+def _split(value: str | None) -> list[str] | None:
+    return [item.strip() for item in value.split(",") if item.strip()] if value else None
+
+
+@query_app.command("status")
+def query_status(market: str = MARKET_OPTION) -> None:
+    """Market mode, data coverage and credential status as JSON."""
+    from . import query
+
+    _emit(market, query.status)
+
+
+@query_app.command("markets")
+def query_markets(market: str = MARKET_OPTION) -> None:
+    """Available market modes and what each one supports."""
+    from . import query
+
+    _emit(market, query.markets)
+
+
+@query_app.command("fields")
+def query_fields(market: str = MARKET_OPTION) -> None:
+    """Names usable in screen formulas: series, scalars, builtin functions, custom indicators."""
+    from . import query
+
+    _emit(market, query.fields)
+
+
+@query_app.command("search")
+def query_search(text: str = typer.Argument(..., help="종목명 또는 코드 일부."), limit: int = typer.Option(10, min=1, max=50), market: str = MARKET_OPTION) -> None:
+    """Find tickers by name or code within the active market."""
+    from . import query
+
+    _emit(market, lambda: query.search(text, limit))
+
+
+@query_app.command("quote")
+def query_quote(ticker: str = typer.Argument(...), market: str = MARKET_OPTION) -> None:
+    """Latest price, fundamentals and held position for one ticker."""
+    from . import query
+
+    _emit(market, lambda: query.quote(ticker))
+
+
+@query_app.command("bars")
+def query_bars(ticker: str = typer.Argument(...), days: int = typer.Option(120, min=1, max=2000), market: str = MARKET_OPTION) -> None:
+    """Recent daily OHLCV bars for one ticker."""
+    from . import query
+
+    _emit(market, lambda: query.bars(ticker, days))
+
+
+@query_app.command("screen")
+def query_screen(
+    formula: str = typer.Option(None, "--formula", "-f", help="불리언 스크린 수식. `mscr query fields`로 쓸 수 있는 이름을 먼저 확인하세요."),
+    preset: str = typer.Option(None, "--preset", "-p", help="저장된 프리셋 이름으로 실행합니다(수식 대신)."),
+    sort: str = typer.Option(None, "--sort", help="정렬 수식(기본 value)."),
+    direction: str = typer.Option("desc", "--dir", help="desc 또는 asc."),
+    kinds: str = typer.Option("stock", "--kinds", help="stock,etf 쉼표 구분."),
+    markets: str = typer.Option(None, "--markets", help="거래소 필터(KOSPI,KOSDAQ / NASDAQ,NYSE …). 비우면 전체."),
+    limit: int = typer.Option(20, "--limit", min=1, max=500),
+    min_bars: int = typer.Option(250, "--min-bars", min=0),
+    as_of_offset: int = typer.Option(0, "--as-of-offset", min=0, help="0=최신 거래일, 1=하루 전 …"),
+    include_preferred: bool = typer.Option(False, "--include-preferred", help="우선주를 포함합니다."),
+    include_spac: bool = typer.Option(False, "--include-spac", help="스팩을 포함합니다."),
+    columns: str = typer.Option(None, "--columns", help="내보낼 열(쉼표 구분). 기본은 요약 열."),
+    full: bool = typer.Option(False, "--full", help="모든 열을 내보냅니다(출력이 큽니다)."),
+    market: str = MARKET_OPTION,
+) -> None:
+    """Run a screen formula (or a saved preset) over the whole market."""
+    from . import query
+
+    def _run():
+        if not formula and not preset:
+            raise ValueError("--formula 또는 --preset 중 하나가 필요합니다")
+        spec = query.preset_spec(preset) if preset else query.build_spec(
+            formula, sort=sort, direction=direction, kinds=_split(kinds), markets_filter=_split(markets),
+            limit=limit, min_bars=min_bars, exclude_preferred=not include_preferred,
+            exclude_spac=not include_spac, as_of_offset=as_of_offset)
+        if preset:
+            spec = spec | {"limit": limit, "as_of_offset": as_of_offset}
+        return query.screen(spec, columns=None if full else _split(columns))
+
+    _emit(market, _run)
+
+
+@query_app.command("presets")
+def query_presets(market: str = MARKET_OPTION) -> None:
+    """Saved screen presets of the active market."""
+    from . import query
+
+    _emit(market, query.presets)
+
+
+@query_app.command("preset-save")
+def query_preset_save(
+    name: str = typer.Argument(...),
+    formula: str = typer.Option(..., "--formula", "-f"),
+    sort: str = typer.Option(None, "--sort"),
+    direction: str = typer.Option("desc", "--dir"),
+    kinds: str = typer.Option("stock", "--kinds"),
+    markets: str = typer.Option(None, "--markets"),
+    limit: int = typer.Option(100, "--limit", min=1, max=2000),
+    min_bars: int = typer.Option(250, "--min-bars", min=0),
+    include_preferred: bool = typer.Option(False, "--include-preferred"),
+    include_spac: bool = typer.Option(False, "--include-spac"),
+    market: str = MARKET_OPTION,
+) -> None:
+    """Create or overwrite a screen preset in the active market."""
+    from . import query
+
+    _emit(market, lambda: query.save_preset(name, query.build_spec(
+        formula, sort=sort, direction=direction, kinds=_split(kinds), markets_filter=_split(markets),
+        limit=limit, min_bars=min_bars, exclude_preferred=not include_preferred, exclude_spac=not include_spac)))
+
+
+@query_app.command("preset-delete")
+def query_preset_delete(name: str = typer.Argument(...), market: str = MARKET_OPTION) -> None:
+    """Delete a screen preset of the active market."""
+    from . import query
+
+    _emit(market, lambda: query.delete_preset(name))
+
+
+@query_app.command("stats")
+def query_stats(date: str = typer.Option(None, "--date", help="YYYY-MM-DD. 생략하면 최신 거래일."), market: str = MARKET_OPTION) -> None:
+    """Whole-market breadth, volume, rankings and valuation for one trading day."""
+    from . import query
+
+    _emit(market, lambda: query.stats(date))
+
+
+@query_app.command("brief")
+def query_brief(date: str = typer.Option(None, "--date"), market: str = MARKET_OPTION) -> None:
+    """End-of-day briefing payload: preset signal changes, watchlist targets, positions."""
+    from . import query
+
+    _emit(market, lambda: query.brief(date))
+
+
+@query_app.command("signals")
+def query_signals(ticker: str = typer.Argument(...), limit: int = typer.Option(20, min=1, max=200), market: str = MARKET_OPTION) -> None:
+    """Which presets caught this ticker, and when."""
+    from . import query
+
+    _emit(market, lambda: query.signal_history(ticker, limit))
+
+
+@query_app.command("signal-diff")
+def query_signal_diff(name: str = typer.Argument(..., help="프리셋 이름."), date: str = typer.Option(None, "--date"), market: str = MARKET_OPTION) -> None:
+    """Tickers a preset gained or dropped between its last two captured days."""
+    from . import query
+
+    _emit(market, lambda: query.signal_diff(name, date))
+
+
+@query_app.command("watchlists")
+def query_watchlists(market: str = MARKET_OPTION) -> None:
+    """Watchlists of the active market with item counts."""
+    from . import query
+
+    _emit(market, query.watchlists)
+
+
+@query_app.command("watchlist")
+def query_watchlist(name: str = typer.Argument(None, help="목록 이름 또는 id. 생략하면 첫 목록."), market: str = MARKET_OPTION) -> None:
+    """Watchlist rows with price, target gap and since-added return."""
+    from . import query
+
+    _emit(market, lambda: query.watchlist_detail(name))
+
+
+@query_app.command("watchlist-create")
+def query_watchlist_create(name: str = typer.Argument(...), market: str = MARKET_OPTION) -> None:
+    """Create an empty watchlist in the active market."""
+    from . import query
+
+    _emit(market, lambda: query.watchlist_create(name))
+
+
+@query_app.command("watchlist-add")
+def query_watchlist_add(
+    ticker: str = typer.Argument(...),
+    name: str = typer.Option(None, "--list", help="대상 목록(생략하면 기본 목록)."),
+    memo: str = typer.Option(None, "--memo"),
+    target: float = typer.Option(None, "--target", help="목표가."),
+    market: str = MARKET_OPTION,
+) -> None:
+    """Add a ticker to a watchlist (records the entry price)."""
+    from . import query
+
+    _emit(market, lambda: query.watchlist_add(ticker, name, memo, target))
+
+
+@query_app.command("watchlist-remove")
+def query_watchlist_remove(ticker: str = typer.Argument(...), name: str = typer.Option(None, "--list"), market: str = MARKET_OPTION) -> None:
+    """Remove a ticker from a watchlist."""
+    from . import query
+
+    _emit(market, lambda: query.watchlist_remove(ticker, name))
+
+
+@query_app.command("portfolio")
+def query_portfolio(market: str = MARKET_OPTION) -> None:
+    """Holdings, cash and unrealised P/L of the active market."""
+    from . import query
+
+    _emit(market, query.positions)
+
+
 signals_app = typer.Typer(add_completion=False, no_args_is_help=True, help="Saved-preset signal log used by the briefing, preset diff and backtest.")
 app.add_typer(signals_app, name="signals")
 

@@ -7,7 +7,8 @@ from pathlib import Path
 from .config import DB_PATH, SCHEMA_VERSION, MSCR_HOME
 
 
-def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
+def connect(path: Path | str | None = None) -> sqlite3.Connection:
+    path = DB_PATH if path is None else path
     connection = sqlite3.connect(str(path), timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
@@ -43,7 +44,7 @@ DROPPED_COLUMNS = {"trade_plans": ("condition", "max_fills")}
 DROPPED_INDEXES = ("idx_trades_broker", "idx_broker_orders_bid")
 
 
-def init_db(path: Path | str | None = DB_PATH) -> None:
+def init_db(path: Path | str | None = None) -> None:
     target = Path(path) if path is not None else DB_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     with connect(target) as connection:
@@ -65,7 +66,7 @@ def init_db(path: Path | str | None = DB_PATH) -> None:
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 @contextmanager
-def db_session(path: Path | str | None = DB_PATH):
+def db_session(path: Path | str | None = None):
     target = Path(path) if path is not None else DB_PATH
     init_db(target)
     connection = connect(target)

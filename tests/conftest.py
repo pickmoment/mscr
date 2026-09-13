@@ -11,6 +11,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_mscr_home(monkeypatch, tmp_path_factory):
-    monkeypatch.setattr("mscr.credentials.MSCR_HOME", tmp_path_factory.mktemp("mscr-home"))
+    home = tmp_path_factory.mktemp("mscr-home")
+    monkeypatch.setattr("mscr.credentials.MSCR_HOME", home)
+    # 경로를 넘기지 않은 DB 접근이 실제 ~/.mscr/mscr.db 로 새지 않게 기본 경로도 임시로 돌린다.
+    monkeypatch.setattr("mscr.db.DB_PATH", home / "mscr.db")
     for name in ("MSCR_MARKET", "MSCR_REQUEST_DELAY_SEC", "MSCR_MASSIVE_DELAY_SEC", "MASSIVE_API_KEY"):
         monkeypatch.delenv(name, raising=False)
