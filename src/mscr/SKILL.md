@@ -76,6 +76,7 @@ description: 로컬 mscr 데이터베이스로 한국(KRX)·미국(Massive) 주�
 | `box` | 마지막 봉에서 뒤로 넓힌 횡보 폭. `exists`가 false면 나머지 값은 "박스가 아니다"라는 뜻뿐이다 |
 | `events` | 봉 하나짜리 사건 — 거래량 급증·갭·이평 교차·신고가. 최근 순 |
 | `trend` | 5·20·60·120 이평 배열과 그 상태가 언제부터인지 |
+| `volume` | `ratio20`=최근 거래량 배수, `obv_ratio20`=순매수 편향(-1~+1), `vwma_spread20`=거래량가중 20이평 ÷ 단순 20이평 - 1 |
 
 ### 원천 고르기 (`--source`)
 
@@ -136,7 +137,7 @@ description: 로컬 mscr 데이터베이스로 한국(KRX)·미국(Massive) 주�
 수식 문법: `and` `or` `not`, 비교식(`>= <= > < ==`), 사칙연산, 괄호. 시리즈(`close`,
 `volume`, `value`, `high`, `low`, `open`)는 마지막 봉 값으로 평가되고, 함수는 `fields`가
 알려주는 것만 쓴다(`sma` `ema` `rsi` `atr` `returns` `rolling_max` `rolling_min`
-`prior_avg_ratio` `crosses_above` `historical_volatility` `slope` `obv` …).
+`prior_avg_ratio` `crosses_above` `historical_volatility` `slope` `obv` `vwma` …).
 
 자주 쓰는 골격:
 
@@ -145,6 +146,7 @@ description: 로컬 mscr 데이터베이스로 한국(KRX)·미국(Massive) 주�
 - 정배열 추세: `sma(close, 20) > sma(close, 60) and sma(close, 60) > sma(close, 120)`
 - 박스 조임: `(rolling_max(high, 20) - rolling_min(low, 20)) / close < 0.08`
 - 변동성 낮은 종목: `atr(high, low, close, 14) / close < 0.03`
+- 매물대 위: `vwma(close, volume, 20) < sma(close, 20)` (거래량이 몰린 가격대가 현재가 아래)
 
 전 종목을 실제로 계산하므로 한 번에 **10초 안팎**이 걸린다. 조건을 조금씩 바꿔 여러 번
 돌리기보다, 한 번에 거른 뒤 결과를 읽고 다음 수식을 정하는 편이 낫다.

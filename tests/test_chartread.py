@@ -143,6 +143,15 @@ def test_events_flag_volume_spikes_against_the_prior_twenty_days():
     assert [item["vol_ratio20"] for item in spikes] == [5.0]
 
 
+def test_volume_block_reports_where_the_traded_volume_sits_against_price():
+    close = np.linspace(100, 120, 60)
+    volume = np.full(60, 1000.0)
+    volume[40:45] = 20000.0  # 거래량이 창의 아래쪽 가격대에 몰린 상승 — 매물대가 현재가 밑이다
+    payload = chartread.read(_frame(close, volume=volume), window=60)
+    assert payload["volume"]["vwma_spread20"] < 0
+    assert chartread.read(_frame(close), window=60)["volume"]["vwma_spread20"] == pytest.approx(0, abs=5e-4)
+
+
 # --- 전처리·조립 --------------------------------------------------------
 
 def test_halted_bars_are_excluded_but_still_counted():

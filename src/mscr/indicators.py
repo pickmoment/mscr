@@ -151,6 +151,17 @@ def obv_ratio(close: pd.Series, volume: pd.Series, n: int) -> pd.Series:
     return signed.rolling(n, min_periods=n).sum() / denominator.where(denominator > 0)
 
 
+def vwma(close: pd.Series, volume: pd.Series, n: int) -> pd.Series:
+    """거래량가중 이동평균: 최근 n봉의 (종가×거래량) 합을 거래량 합으로 나눈다. 거래가 실린
+    가격대로 끌리므로 값 자체는 같은 창의 sma와 거의 겹치고(수준 상관 0.999), 쓸모는 둘의
+    괴리에 있다 — sma보다 낮으면 매물대가 현재가 아래, 높으면 고가권에 거래량이 몰렸다는 뜻이다."""
+    c, v = _valid(_series(close)), _valid(_series(volume))
+    # 종가가 없는 봉은 분자에 못 들어가므로 분모에서도 빼야 가중평균이 어긋나지 않는다.
+    weights = v.where(c.notna())
+    total = weights.rolling(n, min_periods=n).sum()
+    return (c * weights).rolling(n, min_periods=n).sum() / total.where(total > 0)
+
+
 def slope(close: pd.Series, n: int) -> pd.Series:
     values = _series(close)
     x = np.arange(n, dtype=float) - (n - 1) / 2
@@ -213,6 +224,7 @@ def compute_indicators(open_: pd.Series, high: pd.Series, low: pd.Series, close:
     h, l, c = _valid_ohlc(high, low, close)
     v = _valid(volume)
     m5, m20, m60, m120, m200 = (sma(c, n) for n in (5, 20, 60, 120, 200))
+    vw20 = vwma(c, v, 20)
     vm5, vm20, vm60 = (sma(v, n) for n in (5, 20, 60))
     r = {f"ret{n}": returns(c, n) for n in (1, 5, 20, 60, 120, 250)}
     bb = bollinger_bands(c)
@@ -221,6 +233,7 @@ def compute_indicators(open_: pd.Series, high: pd.Series, low: pd.Series, close:
     result: dict[str, pd.Series | float | int] = {
         "ma5": m5, "ma20": m20, "ma60": m60, "ma120": m120, "ma200": m200,
         "vma5": vm5, "vma20": vm20, "vma60": vm60,
+        "vwma20": vw20, "vwma_spread20": vw20 / m20 - 1,
         "vol_ratio5": prior_avg_ratio(v, 5), "vol_ratio20": prior_avg_ratio(v, 20),
         **r,
         "dist_ma20": c / m20 - 1, "dist_ma60": c / m60 - 1,

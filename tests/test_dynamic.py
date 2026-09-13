@@ -21,6 +21,13 @@ def test_formula_dsl_calculates_series_and_rejects_code_execution():
     assert bool(condition.iloc[-1])
 
 
+def test_vwma_is_callable_from_a_formula_with_volume():
+    close = pd.Series([10.0, 20.0, 30.0])
+    volume = pd.Series([1.0, 1.0, 8.0])
+    result = evaluate_formula("vwma(close, volume, 3) - sma(close, 3)", {"close": close, "volume": volume})
+    assert result.iloc[-1] == pytest.approx(7.0)
+
+
 def test_multiline_formula_parses_across_all_entry_points():
     formula = "close > sma(close, 2)\nand rsi(close, 2) >= 0\nand close < 1000000"
     close = pd.Series([10.0, 20.0, 30.0])

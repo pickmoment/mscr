@@ -401,6 +401,8 @@ def read(frame: pd.DataFrame, window: int = DEFAULT_WINDOW, swing_factor: float 
         "volume": {
             "ratio20": _round(_last_finite(columns["vol_ratio20"]), 2),
             "obv_ratio20": _round(_last_finite(obv_ratio(series["close"], series["volume"], 20).to_numpy(dtype=float)), 3),
+            # 매물대가 현재가 위인지 아래인지 — 거래량가중 20이평이 단순 20이평보다 낮으면 음수다.
+            "vwma_spread20": _round(_last_finite(columns["vwma_spread20"]), 4),
         },
         "events": events(dates, columns, offset),
         # 이 판독이 무엇을 "의미 있는 움직임"으로 쳤는지 — 구간이 화면과 어긋날 때 볼 곳이다.

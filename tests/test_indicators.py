@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, rsi, slope, sma
+from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, rsi, slope, sma, vwma
 
 
 def test_sma_and_ema_conventions():
@@ -60,6 +60,27 @@ def test_obv_ratio_bounds_are_reached_by_one_sided_windows():
 def test_obv_ratio_is_undefined_when_the_window_has_no_volume():
     close = pd.Series([10.0, 11.0, 12.0, 13.0])
     assert pd.isna(obv_ratio(close, pd.Series([0.0] * 4), 3).iloc[-1])
+
+
+def test_vwma_weights_each_bar_by_its_volume():
+    close = pd.Series([10.0, 20.0, 30.0])
+    volume = pd.Series([1.0, 1.0, 8.0])
+    # (10 + 20 + 240) / 10 = 27.0 — 거래량이 실린 30 쪽으로 끌린다(단순 평균은 20).
+    assert vwma(close, volume, 3).iloc[-1] == pytest.approx(27.0)
+    assert sma(close, 3).iloc[-1] == pytest.approx(20.0)
+
+
+def test_vwma_drops_the_window_when_a_close_is_missing():
+    close = pd.Series([10.0, float("nan"), 30.0, 30.0])
+    volume = pd.Series([1.0, 5.0, 1.0, 1.0])
+    # 종가 없는 봉의 거래량이 분모에만 들어가면 값이 눌린다. 그 창은 통째로 비운다.
+    assert pd.isna(vwma(close, volume, 3).iloc[2])
+    assert vwma(close, volume, 2).iloc[-1] == pytest.approx(30.0)
+
+
+def test_vwma_is_undefined_when_the_window_has_no_volume():
+    close = pd.Series([10.0, 11.0, 12.0])
+    assert pd.isna(vwma(close, pd.Series([0.0] * 3), 3).iloc[-1])
 
 
 def test_slope_normalizes_linear_series_by_window_mean():
