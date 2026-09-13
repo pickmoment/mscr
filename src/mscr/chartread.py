@@ -39,8 +39,6 @@ MIN_SWING_RATIO = 0.05  # 스윙은 적어도 창 전체 폭의 이만큼은 되
 BOX_ATR_MULT = 2.5    # 박스로 쳐 주는 최대 폭 = ATR14의 이 배수
 MIN_SEGMENT_BARS = 3  # 이보다 짧은 되돌림은 제 구간을 주지 않고 이웃에 붙인다
 MA_PERIODS = (5, 20, 60, 120)
-SKETCH_WIDTH = 60
-SKETCH_BLOCKS = "▁▂▃▄▅▆▇█"
 MAX_SWINGS = 8
 MAX_LEVELS = 6
 MAX_LEVEL_DISTANCE = 0.4  # 현재가에서 이보다 먼 수평선은 지금 얘기에 쓸모가 없다
@@ -311,22 +309,6 @@ def events(dates: list[str], frame: dict[str, np.ndarray], offset: int) -> list[
     return unique[:MAX_EVENTS]
 
 
-# --- 6. 스케치 ----------------------------------------------------------
-
-def sketch(close: np.ndarray, width: int = SKETCH_WIDTH) -> dict[str, Any]:
-    """창을 width칸으로 줄인 문자 캔들. 구간 라벨이 놓치는 "쌍봉인가 계단인가"를 100토큰에 준다.
-
-    칸마다 평균이 아니라 마지막 종가를 쓴다 — 평균을 쓰면 꺾이는 지점이 뭉개진다.
-    """
-    low, high = float(np.nanmin(close)), float(np.nanmax(close))
-    if not math.isfinite(low) or high <= low:
-        return {"low": low, "high": high, "line": SKETCH_BLOCKS[0] * min(width, len(close))}
-    bounds = np.linspace(0, len(close), min(width, len(close)) + 1).astype(int)
-    picks = [close[max(bounds[i], bounds[i + 1] - 1)] for i in range(len(bounds) - 1)]
-    steps = np.clip(((np.array(picks) - low) / (high - low) * (len(SKETCH_BLOCKS) - 1)).round(), 0, len(SKETCH_BLOCKS) - 1)
-    return {"low": low, "high": high, "line": "".join(SKETCH_BLOCKS[int(step)] for step in steps)}
-
-
 # --- 조립 ---------------------------------------------------------------
 
 def _trend(indicators: dict[str, pd.Series], length: int) -> dict[str, Any]:
@@ -350,7 +332,7 @@ def _trend(indicators: dict[str, pd.Series], length: int) -> dict[str, Any]:
 
 def read(frame: pd.DataFrame, window: int = DEFAULT_WINDOW, swing_factor: float = SWING_FACTOR,
          min_swing_ratio: float = MIN_SWING_RATIO,
-         box_atr_mult: float = BOX_ATR_MULT, box_min_bars: int = 15, with_sketch: bool = False) -> dict[str, Any]:
+         box_atr_mult: float = BOX_ATR_MULT, box_min_bars: int = 15) -> dict[str, Any]:
     """캔들 프레임(date 오름차순, `daily_bars` 열 그대로)을 구조 요약으로 바꾼다.
 
     주기를 모른다 — 일봉이든 5분봉이든 봉 수로만 센다. 그래서 `bars`·`신고가250`처럼 이름에 "일"을
@@ -397,7 +379,7 @@ def read(frame: pd.DataFrame, window: int = DEFAULT_WINDOW, swing_factor: float 
     trend["since"] = valid["date"].astype(str).iloc[since_index] if since_index is not None else None
     trend["slope20_pct_per_day"] = _round(_last_finite(slope(series["close"], 20).to_numpy(dtype=float)), 5)
 
-    payload: dict[str, Any] = {
+    return {
         "as_of": dates[-1],
         "window": {"from": dates[0], "to": dates[-1], "bars": len(dates)},
         "bars_available": len(valid),
@@ -427,6 +409,3 @@ def read(frame: pd.DataFrame, window: int = DEFAULT_WINDOW, swing_factor: float 
                        "box_width": _round(box_width),
                        "swings_found": len(pivots)},
     }
-    if with_sketch:
-        payload["sketch"] = sketch(close)
-    return payload

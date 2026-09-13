@@ -544,7 +544,7 @@ uv run mscr query screen -m us --limit 10 \
   -f "close / rolling_max(high, 250) - 1 >= -0.02 and sma(value, 20) > 200000000" \
   --sort "sma(value, 20)"
 uv run mscr query quote AAPL -m us                  # 시세·재무·보유
-uv run mscr query chart AAPL -m us --sketch         # 차트를 말로 옮긴 구조 요약
+uv run mscr query chart AAPL -m us                  # 차트를 말로 옮긴 구조 요약
 uv run mscr query watchlist-add AAPL --list 관심 -m us
 ```
 
@@ -573,7 +573,6 @@ uv run mscr query watchlist-add AAPL --list 관심 -m us
   "levels":   [ { "price": 287750.0, "role": "저항", "touches": 2, "last": "2026-08-18" } ],
   "box":      { "exists": false, "bars": 14, "width_pct": 0.1338, "position_in_box": 0.7222 },
   "events":   [ { "date": "2026-07-31", "kind": "갭상승", "gap_pct": 0.2415, "filled": false } ],
-  "sketch":   { "line": "▁▁▁▁▁▂▂▂▂▂▂▂▂▂▂▂▂▂▂▃▃▃▃▃▃▃▄▄▃▄▄▄▄▄▄▄▅▅▅▆▆▆▇▇▆█▇▇▇▆▅▆▄▅▅▆▅▅▅▆" },
   "resolution": { "swing_factor": 3.0, "swing_threshold": 0.1635, "box_width": 0.1363, "swings_found": 12 }
 }
 ```

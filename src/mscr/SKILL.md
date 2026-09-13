@@ -61,7 +61,7 @@ description: 로컬 mscr 데이터베이스로 한국(KRX)·미국(Massive) 주�
 ## 차트 읽기
 
 ```bash
-{{MSCR}} query chart 005930 -m kr --window 250 --sketch
+{{MSCR}} query chart 005930 -m kr --window 250
 {{MSCR}} query chart 005930 -m kr --source alphasquare --freq minute-5 --window 200
 ```
 
@@ -76,7 +76,6 @@ description: 로컬 mscr 데이터베이스로 한국(KRX)·미국(Massive) 주�
 | `box` | 마지막 봉에서 뒤로 넓힌 횡보 폭. `exists`가 false면 나머지 값은 "박스가 아니다"라는 뜻뿐이다 |
 | `events` | 봉 하나짜리 사건 — 거래량 급증·갭·이평 교차·신고가. 최근 순 |
 | `trend` | 5·20·60·120 이평 배열과 그 상태가 언제부터인지 |
-| `sketch` | `--sketch`로만. 창을 60칸으로 줄인 문자 캔들 — 쌍봉인지 계단인지 같은 형태 감각용 |
 
 ### 원천 고르기 (`--source`)
 

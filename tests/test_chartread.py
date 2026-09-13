@@ -164,14 +164,6 @@ def test_reading_needs_enough_bars_to_have_a_structure():
         chartread.read(_frame(np.linspace(100, 110, 12)))
 
 
-def test_sketch_maps_the_window_onto_blocks_lowest_to_highest():
-    payload = chartread.read(_frame(np.linspace(100, 200, 120)), window=120, with_sketch=True)
-    sketch = payload["sketch"]
-    assert len(sketch["line"]) == chartread.SKETCH_WIDTH
-    assert sketch["line"][0] == "▁" and sketch["line"][-1] == "█"
-    assert sketch["low"] == 100.0 and sketch["high"] == 200.0
-
-
 # --- query 계층 ---------------------------------------------------------
 
 @pytest.fixture()
