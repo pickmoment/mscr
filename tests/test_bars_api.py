@@ -170,6 +170,34 @@ def test_volume_ma_absent_when_not_requested(store, monkeypatch):
     assert "volume_ma" not in result
 
 
+def test_livermore_indicator_returns_pivot_line_and_phase_segments(store, monkeypatch):
+    rising = [100.0 + step * (100.0 / 19) for step in range(20)]
+    falling = [200.0 - step * (50.0 / 5) for step in range(1, 6)]
+    closes = rising + falling
+    with db_session(store) as db:
+        rows = [("000001", f"2026-01-{day:02d}", "krx_snapshot", close, close * 1.01, close * 0.99, close, 1000.0, close * 1000.0, None, 0)
+                for day, close in enumerate(closes, start=1)]
+        db.executemany("INSERT INTO daily_bars(ticker,date,source,open,high,low,close,volume,value,nav,halted) VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
+    monkeypatch.setattr(routes, "KRXProvider", lambda: type("EmptyHistoryProvider", (), {"history": staticmethod(lambda *a, **k: pd.DataFrame())})())
+
+    result = _call("000001", indicators="livermore", livermore_period=3, livermore_k=2.0)
+
+    assert result["livermore_pivot"][-1]["value"] == pytest.approx(closes[-1])
+    codes = [segment["phase_code"] for segment in result["livermore_segments"]]
+    assert 1 in codes  # 상승국면 구간이 먼저 잡히고
+    assert codes[-1] == 2  # 되돌림이 필터를 넘어서면서 자연반락으로 넘어간다
+
+
+def test_livermore_indicator_absent_when_not_requested(store, monkeypatch):
+    with db_session(store) as db:
+        _seed_krx_snapshot(db, "000001", ["2026-08-27", "2026-08-28"])
+    monkeypatch.setattr(routes, "KRXProvider", lambda: type("EmptyHistoryProvider", (), {"history": staticmethod(lambda *a, **k: pd.DataFrame())})())
+
+    result = _call("000001", indicators="ma")
+
+    assert "livermore_pivot" not in result and "livermore_segments" not in result
+
+
 def _plot_store(store, monkeypatch):
     with db_session(store) as db:
         rows = [("000001", f"2026-01-{d:02d}", "krx_snapshot", 100.0, 101.0, 99.0, 100.0 + d, 1000.0, 100000.0, None, 0) for d in range(1, 6)]

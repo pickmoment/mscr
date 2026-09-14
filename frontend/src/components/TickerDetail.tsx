@@ -4,6 +4,7 @@ import FormulaInput from './FormulaInput';
 import { chartSuggestions } from '../lib/suggest';
 import TickerChart from './TickerChart';
 import { ratio, money } from '../lib/format';
+import { LIVERMORE_PHASE_LABELS } from '../lib/livermore';
 import PositionPlanner from './PositionPlanner';
 import { marketInfo } from '../lib/market';
 import { defaultPlan, loadPositionPlans, POSITION_EVENT, PositionPlan, storePositionPlan } from '../lib/position';
@@ -11,7 +12,7 @@ import { MeasureMode } from '../lib/measure';
 import { SelectTicker } from '../lib/nav';
 import ViewHeader from './ViewHeader';
 
-const defaultConfig: ChartIndicatorParams = { maPeriods: [5, 20, 60], rsiPeriod: 14, macdFast: 12, macdSlow: 26, macdSignal: 9, bbPeriod: 20, bbK: 2, volumeMaPeriod: 50 };
+const defaultConfig: ChartIndicatorParams = { maPeriods: [5, 20, 60], rsiPeriod: 14, macdFast: 12, macdSlow: 26, macdSignal: 9, bbPeriod: 20, bbK: 2, volumeMaPeriod: 50, livermorePeriod: 14, livermoreK: 2 };
 const defaultEnabled = ['ma', 'rsi', 'macd', 'bb', 'volume_ma'];
 // 수식 지표 — 스크리너와 같은 수식 언어로 아무 지표나 만들어 차트에 얹는다. 서버 상한(MAX_CHART_PLOTS)과 맞춘다.
 const MAX_PLOTS = 8;
@@ -235,6 +236,8 @@ export default function TickerDetail({ ticker, tickers, onSelect, light }: { tic
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('macd')} onChange={() => toggle('macd')} />MACD</label><div className="parameter-inputs"><input aria-label="MACD 단기" type="number" min="1" value={config.macdFast} onChange={event => setConfig(current => ({ ...current, macdFast: Number(event.target.value) }))} /><input aria-label="MACD 장기" type="number" min="1" value={config.macdSlow} onChange={event => setConfig(current => ({ ...current, macdSlow: Number(event.target.value) }))} /><input aria-label="MACD 시그널" type="number" min="1" value={config.macdSignal} onChange={event => setConfig(current => ({ ...current, macdSignal: Number(event.target.value) }))} /></div></div>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('bb')} onChange={() => toggle('bb')} />Bollinger</label><div className="parameter-inputs"><input aria-label="볼린저 기간" type="number" min="1" value={config.bbPeriod} onChange={event => setConfig(current => ({ ...current, bbPeriod: Number(event.target.value) }))} /><input aria-label="볼린저 배수" type="number" min="0.1" step="0.1" value={config.bbK} onChange={event => setConfig(current => ({ ...current, bbK: Number(event.target.value) }))} /></div></div>
     <div className="indicator-control"><label className="check"><input type="checkbox" checked={enabled.includes('volume_ma')} onChange={() => toggle('volume_ma')} />거래량 이평</label><input aria-label="거래량 이평 기간" type="number" min="1" value={config.volumeMaPeriod} onChange={event => setConfig(current => ({ ...current, volumeMaPeriod: Number(event.target.value) }))} /></div>
+    <div className="indicator-control"><label className="check" title="종가 기준 국면 전이(FSM) — 필터폭은 국면 전환 시점의 ATR × k로 고정합니다. 가격판에 국면 배경 띠와 피벗 점선을 얹습니다."><input type="checkbox" checked={enabled.includes('livermore')} onChange={() => toggle('livermore')} />리버모어 국면</label><div className="parameter-inputs"><input aria-label="리버모어 ATR 기간" type="number" min="2" value={config.livermorePeriod} onChange={event => setConfig(current => ({ ...current, livermorePeriod: Number(event.target.value) }))} /><input aria-label="리버모어 필터 배수" type="number" min="0.1" step="0.1" value={config.livermoreK} onChange={event => setConfig(current => ({ ...current, livermoreK: Number(event.target.value) }))} /></div></div>
+    {enabled.includes('livermore') && chart?.livermore_segments?.length ? <p className="subtle">현재 국면: <b>{LIVERMORE_PHASE_LABELS[chart.livermore_segments[chart.livermore_segments.length - 1].phase_code]}</b>{chart.livermore_pivot?.length ? ` · 피벗 ${money(chart.livermore_pivot[chart.livermore_pivot.length - 1].value)}` : ''}</p> : null}
     <div className="toolbar"><div className="section-title">수식 지표</div><button className="btn btn--quiet btn--sm push" disabled={plots.length >= MAX_PLOTS} onClick={addPlot} title={plots.length >= MAX_PLOTS ? `한 차트에 최대 ${MAX_PLOTS}개까지 얹을 수 있습니다` : '스크리너와 같은 수식으로 지표를 만들어 차트에 얹습니다'}>+ 추가</button></div>
     {!plots.length && <p className="subtle">스크리너와 같은 수식을 써서 원하는 지표를 직접 그립니다. 예: <code>obv_ratio(close, volume, 20)</code>, <code>close / sma(close, 60) - 1</code>, <code>close &gt; sma(close, 20)</code>. 저장해 둔 사용자 지표도 이름으로 부를 수 있습니다.</p>}
     {plots.map(spec => <div className="indicator-control plot-row" key={spec.id}>

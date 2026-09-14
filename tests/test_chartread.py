@@ -151,6 +151,22 @@ def test_volume_block_reports_where_the_traded_volume_sits_against_price():
     assert payload["volume"]["vwma_spread20"] < 0
     assert chartread.read(_frame(close), window=60)["volume"]["vwma_spread20"] == pytest.approx(0, abs=5e-4)
 
+# --- 리버모어 국면 -------------------------------------------------------
+
+def test_livermore_reports_up_trend_and_its_pivot_on_a_clean_rally():
+    payload = chartread.read(_frame(np.linspace(100, 200, 120)), window=120)
+    assert payload["livermore"]["phase"] == "up_trend"
+    assert payload["livermore"]["phase_code"] == 1
+    assert payload["livermore"]["pivot"] == pytest.approx(200.0)
+
+
+def test_livermore_flips_to_natural_reaction_after_a_confirmed_pullback():
+    close = np.r_[np.linspace(100, 200, 110), np.linspace(200, 150, 10)]
+    payload = chartread.read(_frame(close), window=120)
+    assert payload["livermore"]["phase"] == "natural_reaction"
+    assert payload["livermore"]["pivot"] == pytest.approx(150.0)
+    assert payload["livermore"]["since"] < payload["as_of"]
+
 
 # --- 전처리·조립 --------------------------------------------------------
 

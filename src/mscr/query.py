@@ -199,7 +199,8 @@ def _alphasquare_bars(db, code: str, freq: str, needed: int) -> pd.DataFrame:
 
 
 def chart(ticker: str, window: int = chartread.DEFAULT_WINDOW, source: str = "local", freq: str = "day",
-          swing_factor: float = chartread.SWING_FACTOR) -> dict[str, Any]:
+          swing_factor: float = chartread.SWING_FACTOR,
+          livermore_period: int = chartread.LIVERMORE_ATR_PERIOD, livermore_k: float = chartread.LIVERMORE_K) -> dict[str, Any]:
     """차트를 그리지 않고 설명할 수 있게 만든 구조 요약 — 구간·스윙·수평선·사건.
 
     같은 250봉을 `bars`로 주면 40KB인데 여기서는 4KB 안팎이고, 줄어든 대신 "3개월 횡보 뒤
@@ -227,7 +228,8 @@ def chart(ticker: str, window: int = chartread.DEFAULT_WINDOW, source: str = "lo
     return {"ticker": code, "name": item["name"], "kind": item["kind"], "market": item["market"],
             "currency": market.active().currency, "source": source,
             "freq": freq if source == "alphasquare" else "day", "adjusted": adjusted} | chartread.read(
-        frame, window=int(window), swing_factor=float(swing_factor))
+        frame, window=int(window), swing_factor=float(swing_factor),
+        livermore_period=int(livermore_period), livermore_k=float(livermore_k))
 
 
 # --- 스크리너 -----------------------------------------------------------

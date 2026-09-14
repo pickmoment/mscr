@@ -28,6 +28,15 @@ def test_vwma_is_callable_from_a_formula_with_volume():
     assert result.iloc[-1] == pytest.approx(7.0)
 
 
+def test_livermore_phase_and_pivot_are_callable_from_a_formula():
+    close = pd.Series([100.0, 100.5, 101.0, 96.0], dtype=float)
+    env = {"high": close + 1, "low": close - 1, "close": close}
+    phase = evaluate_formula("livermore_phase(high, low, close, 3, 2.0)", env)
+    pivot = evaluate_formula("livermore_pivot(high, low, close, 3, 2.0)", env)
+    assert phase.iloc[-1] == 2.0  # NATURAL_REACTION — the drop cleared the ATR filter
+    assert pivot.iloc[-1] == pytest.approx(96.0)
+
+
 def test_multiline_formula_parses_across_all_entry_points():
     formula = "close > sma(close, 2)\nand rsi(close, 2) >= 0\nand close < 1000000"
     close = pd.Series([10.0, 20.0, 30.0])

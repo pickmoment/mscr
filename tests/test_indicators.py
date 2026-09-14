@@ -2,12 +2,46 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, rsi, slope, sma, vwma
+from mscr.indicators import atr, bollinger_bands, crosses, detect_price_jump, ema, historical_volatility, livermore_phase, livermore_pivot, obv, obv_ratio, prior_avg_ratio, rsi, slope, sma, vwma
 
 
 def test_sma_and_ema_conventions():
     np.testing.assert_allclose(sma(pd.Series([1, 2, 3, 4]), 3).to_numpy(), [np.nan, np.nan, 2.0, 3.0], equal_nan=True)
     assert ema(pd.Series([10, 11, 12]), 3).tolist() == [10.0, 10.5, 11.25]
+
+
+def _phase_and_pivot(closes: list[float], n: int = 3, k: float = 2.0):
+    close = pd.Series(closes, dtype=float)
+    high, low = close + 1, close - 1  # constant true range keeps ATR (and the filter width) predictable
+    return livermore_phase(high, low, close, n, k), livermore_pivot(high, low, close, n, k)
+
+
+def test_livermore_phase_ignores_a_drop_inside_the_atr_filter():
+    # ATR settles at 2 (constant true range), so a k=2 filter is 4 points wide; a 3-point dip must not flip the phase.
+    phase, pivot = _phase_and_pivot([100, 100.5, 101, 98])
+    assert phase.iloc[-1] == 1.0  # still UP_TREND
+    assert pivot.iloc[-1] == 101.0  # pivot untouched — no new high, no confirmed reaction
+
+
+def test_livermore_phase_flips_to_natural_reaction_past_the_filter():
+    phase, pivot = _phase_and_pivot([100, 100.5, 101, 96])
+    assert phase.iloc[-1] == 2.0  # NATURAL_REACTION
+    assert pivot.iloc[-1] == 96.0
+
+
+def test_livermore_phase_confirms_uptrend_continuation_after_secondary_rally():
+    # reaction bottoms at 96, rallies past the reaction filter into SECONDARY_RALLY (103), then
+    # a further close above the prior UP_TREND pivot (101.2) confirms the trend resumed.
+    phase, pivot = _phase_and_pivot([100, 100.5, 101, 101.2, 96, 97, 98, 103, 102.5])
+    assert phase.iloc[-2] == 3.0  # SECONDARY_RALLY the day it broke out
+    assert phase.iloc[-1] == 1.0  # UP_TREND confirmed the next close
+    assert pivot.iloc[-1] == 102.5
+
+
+def test_livermore_phase_reverses_to_down_trend_from_a_failed_secondary_rally():
+    phase, pivot = _phase_and_pivot([100, 100.5, 101, 101.2, 96, 97, 98, 103, 80])
+    assert phase.iloc[-1] == -1.0  # DOWN_TREND — the rally failed and broke back below the reaction low
+    assert pivot.iloc[-1] == 80.0
 
 
 def test_rsi_seed_and_flat_boundaries():

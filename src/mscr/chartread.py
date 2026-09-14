@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from .dynamic import truncate_price_jump
-from .indicators import compute_indicators, obv_ratio, slope
+from .indicators import compute_indicators, livermore_phase, livermore_pivot, obv_ratio, slope
 
 DEFAULT_WINDOW = 250
 WARMUP = 250          # 창 첫 봉부터 250봉 신고가·장기 이평선이 값을 갖도록 앞에 더 읽어 두는 구간
@@ -43,6 +43,9 @@ MAX_SWINGS = 8
 MAX_LEVELS = 6
 MAX_LEVEL_DISTANCE = 0.4  # 현재가에서 이보다 먼 수평선은 지금 얘기에 쓸모가 없다
 MAX_EVENTS = 12
+LIVERMORE_ATR_PERIOD = 14
+LIVERMORE_K = 2.0
+_PHASE_LABELS = {1.0: "up_trend", 2.0: "natural_reaction", 3.0: "secondary_rally", -1.0: "down_trend", -2.0: "natural_rally", -3.0: "secondary_reaction"}
 
 
 def _round(value: Any, digits: int = 4) -> float | None:
@@ -271,7 +274,36 @@ def box(high: np.ndarray, low: np.ndarray, close: np.ndarray, max_width: float, 
     }
 
 
-# --- 5. 사건 ------------------------------------------------------------
+# --- 5. 리버모어 국면 ----------------------------------------------------
+
+def livermore_summary(dates: list[str], high: pd.Series, low: pd.Series, close: pd.Series,
+                       period: int = LIVERMORE_ATR_PERIOD, k: float = LIVERMORE_K) -> dict[str, Any]:
+    """현재 국면과 그 국면의 판단 기준(피벗)을 요약한다. 창(window)이 아니라 읽어 둔 전체 유효
+    구간에서 계산한다 — 국면은 창보다 오래 지속될 수 있어, 창만 보면 "언제부터"를 놓친다."""
+    phase = livermore_phase(high, low, close, period, k).to_numpy()
+    pivot = livermore_pivot(high, low, close, period, k)
+    valid = np.flatnonzero(~np.isnan(phase))
+    if len(valid) == 0:
+        return {"phase": None, "phase_code": None, "since": None, "pivot": None, "distance_pct": None,
+                "params": {"atr_period": period, "k": k}}
+    last = int(valid[-1])
+    code = float(phase[last])
+    start = last
+    while start > valid[0] and phase[start - 1] == code:
+        start -= 1
+    pivot_value = float(pivot.iloc[last])
+    last_close = float(close.iloc[last])
+    return {
+        "phase": _PHASE_LABELS[code],
+        "phase_code": int(code),
+        "since": dates[start],
+        "pivot": _round(pivot_value),
+        "distance_pct": _round(last_close / pivot_value - 1, 4) if pivot_value else None,
+        "params": {"atr_period": period, "k": k},
+    }
+
+
+# --- 6. 사건 ------------------------------------------------------------
 
 def _top(score: np.ndarray, mask: np.ndarray, count: int) -> list[int]:
     hits = np.flatnonzero(mask & np.isfinite(score))
@@ -332,7 +364,8 @@ def _trend(indicators: dict[str, pd.Series], length: int) -> dict[str, Any]:
 
 def read(frame: pd.DataFrame, window: int = DEFAULT_WINDOW, swing_factor: float = SWING_FACTOR,
          min_swing_ratio: float = MIN_SWING_RATIO,
-         box_atr_mult: float = BOX_ATR_MULT, box_min_bars: int = 15) -> dict[str, Any]:
+         box_atr_mult: float = BOX_ATR_MULT, box_min_bars: int = 15,
+         livermore_period: int = LIVERMORE_ATR_PERIOD, livermore_k: float = LIVERMORE_K) -> dict[str, Any]:
     """캔들 프레임(date 오름차순, `daily_bars` 열 그대로)을 구조 요약으로 바꾼다.
 
     주기를 모른다 — 일봉이든 5분봉이든 봉 수로만 센다. 그래서 `bars`·`신고가250`처럼 이름에 "일"을
@@ -398,6 +431,7 @@ def read(frame: pd.DataFrame, window: int = DEFAULT_WINDOW, swing_factor: float 
                     "confirmed": item["confirmed"]} for item in pivots[-MAX_SWINGS:]],
         "levels": levels(pivots, dates, last_close, tolerance),
         "box": box(high, low, close, box_width, box_min_bars),
+        "livermore": livermore_summary(valid["date"].astype(str).tolist(), series["high"], series["low"], series["close"], livermore_period, livermore_k),
         "volume": {
             "ratio20": _round(_last_finite(columns["vol_ratio20"]), 2),
             "obv_ratio20": _round(_last_finite(obv_ratio(series["close"], series["volume"], 20).to_numpy(dtype=float)), 3),

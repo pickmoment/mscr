@@ -15,7 +15,7 @@ from ..broker.kis import KISError, broker_from_config, broker_status, clear_cred
 from ..db import db_session
 from ..market import bar_source
 from ..dynamic import BUILTIN_CATALOG, BUILTIN_FUNCTIONS, SCREEN_NAMES, SERIES_NAMES, custom_definitions, evaluate_formula, formula_calls, ticker_snapshot, truncate_price_jump, validate_formula
-from ..indicators import bollinger_bands, macd, rsi, sma
+from ..indicators import bollinger_bands, livermore_phase, livermore_phase_segments, livermore_pivot, macd, rsi, sma
 from .. import market_stats
 from .. import watchlist
 from ..portfolio import reconcile, replay_trades, snapshot, validate_trade
@@ -256,7 +256,10 @@ def delete_screen(screen_id: int):
 def indicators():
     fields_by_key = {key: spec for key, spec in FIELDS.items()}
     inputs = [{"id": None, "key": key, "label": fields_by_key[key].label_ko, "unit": fields_by_key[key].unit, "formula": None, "parameters": [], "enabled": True, "builtin": True, "series": key in SERIES_NAMES, "kind": fields_by_key[key].kind, "created_at": None, "updated_at": None} for key in fields_by_key if key in SCREEN_NAMES]
-    functions = [{"id": None, "key": item["key"], "label": item["label"], "unit": "number", "formula": item["signature"], "parameters": [{"name": "period", "default": 20, "min": 1, "max": 10000, "integer": True}] if item["key"] in {"sma", "ema", "vwma", "rsi", "returns", "prior_avg_ratio", "obv", "obv_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min"} else [], "enabled": True, "builtin": True, "series": False, "kind": "function", "created_at": None, "updated_at": None} for item in BUILTIN_CATALOG]
+    _period_param = [{"name": "period", "default": 20, "min": 1, "max": 10000, "integer": True}]
+    _livermore_params = [{"name": "period", "default": 14, "min": 1, "max": 10000, "integer": True}, {"name": "k", "default": 2.0, "min": 0.1, "max": 100, "integer": False}]
+    _function_parameters = {key: _period_param for key in {"sma", "ema", "vwma", "rsi", "returns", "prior_avg_ratio", "obv", "obv_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min"}} | {key: _livermore_params for key in {"livermore_phase", "livermore_pivot"}}
+    functions = [{"id": None, "key": item["key"], "label": item["label"], "unit": "number", "formula": item["signature"], "parameters": _function_parameters.get(item["key"], []), "enabled": True, "builtin": True, "series": False, "kind": "function", "created_at": None, "updated_at": None} for item in BUILTIN_CATALOG]
     custom = [item | {"builtin": False, "series": False, "kind": "function"} for item in custom_definitions(enabled_only=False)]
     return inputs + functions + custom
 
@@ -409,7 +412,7 @@ def _chart_plots(spec: str, valid: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 @router.get("/instruments/{ticker}/bars")
-def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000), plots: str = Query("")):
+def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), freq: str = Query("day"), count: int = Query(1000, ge=1, le=5000), indicators: str = Query("ma,rsi,macd,bb,volume_ma"), ma_periods: str = Query("5,20,60"), rsi_period: int = Query(14, ge=1, le=10000), macd_fast: int = Query(12, ge=1, le=10000), macd_slow: int = Query(26, ge=1, le=10000), macd_signal: int = Query(9, ge=1, le=10000), bb_period: int = Query(20, ge=1, le=10000), bb_k: float = Query(2.0, gt=0, le=20), volume_ma_period: int = Query(50, ge=1, le=10000), livermore_period: int = Query(14, ge=2, le=200), livermore_k: float = Query(2.0, gt=0, le=20), plots: str = Query("")):
     if source not in {"local", "alphasquare"}:
         raise HTTPException(422, "invalid source")
     if source == "local" and range not in {"3m", "6m", "1y", "3y", "max"}:
@@ -496,6 +499,11 @@ def bars(ticker: str, range: str = Query("1y"), source: str = Query("local"), fr
     if "volume_ma" in requested:
         values = sma(series[4], volume_ma_period)
         output["volume_ma"] = [{"time": idx, "value": value} for idx, value in values.items() if pd.notna(value)]
+    if "livermore" in requested:
+        phase = livermore_phase(series[1], series[2], series[3], livermore_period, livermore_k)
+        pivot = livermore_pivot(series[1], series[2], series[3], livermore_period, livermore_k)
+        output["livermore_pivot"] = [{"time": idx, "value": value} for idx, value in pivot.items() if pd.notna(value)]
+        output["livermore_segments"] = livermore_phase_segments(phase)
     if plots.strip():
         output["plots"] = _chart_plots(plots, valid)
     return output

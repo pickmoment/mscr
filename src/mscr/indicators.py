@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -105,6 +106,114 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Se
     seeded.iloc[n - 1] = valid.iloc[:n].mean()
     out.loc[valid.index] = seeded.ewm(alpha=1 / n, adjust=False).mean()
     return out
+
+
+_UP_TREND, _NATURAL_REACTION, _SECONDARY_RALLY = 1.0, 2.0, 3.0
+_DOWN_TREND, _NATURAL_RALLY, _SECONDARY_REACTION = -1.0, -2.0, -3.0
+"""리버모어 6국면 코드: 상승국면=1, 자연반락=2, 2차반등=3, 하락국면=-1, 자연반등=-2, 2차반락=-3.
+부호가 큰 방향(상승/하락)을, 절댓값이 국면 단계(추세중=1, 되돌림중=2, 되돌림후 재확인 대기=3)를 나타낸다."""
+
+
+def _livermore_state(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14, k: float = 2.0) -> tuple[pd.Series, pd.Series]:
+    """종가 기준 국면 전이(FSM)로 리버모어의 6국면과 국면별 피벗 종가를 계산한다.
+
+    필터폭(직전 극값으로부터의 최소 이동폭)은 `k * ATR(n)`이며, 국면이 전환되는 시점의 ATR로
+    고정하고 같은 국면이 이어지는 동안은 재계산하지 않는다 — 판단 중 임계값이 흔들리지 않게 하려는
+    리버모어 원문의 "고정폭 표"를 그대로 재현한 것. 장중 값은 보지 않고 종가만 본다."""
+    h, l, c = _valid_ohlc(high, low, close)
+    atr_values = atr(h, l, c, n).to_numpy()
+    closes = c.to_numpy()
+    valid = ~np.isnan(atr_values) & ~np.isnan(closes)
+    n_bars = len(closes)
+    phase = np.full(n_bars, np.nan)
+    pivot = np.full(n_bars, np.nan)
+    start = int(np.argmax(valid)) if valid.any() else n_bars
+    if start >= n_bars or not valid[start]:
+        return pd.Series(phase, index=c.index), pd.Series(pivot, index=c.index)
+
+    window = closes[: start + 1][~np.isnan(closes[: start + 1])]
+    state = _UP_TREND if closes[start] >= window[0] else _DOWN_TREND
+    trend_origin = window.max() if state == _UP_TREND else window.min()
+    reaction_extreme = trend_origin
+    sub_pivot = trend_origin
+    filter_width = k * atr_values[start]
+    phase[start], pivot[start] = state, trend_origin
+
+    for i in range(start + 1, n_bars):
+        if not valid[i]:
+            phase[i], pivot[i] = phase[i - 1], pivot[i - 1]
+            continue
+        c_i, a_i = closes[i], atr_values[i]
+        if state == _UP_TREND:
+            if c_i > trend_origin:
+                trend_origin = c_i
+            elif c_i < trend_origin - filter_width:
+                state, reaction_extreme, filter_width = _NATURAL_REACTION, c_i, k * a_i
+        elif state == _NATURAL_REACTION:
+            if c_i < reaction_extreme:
+                reaction_extreme = c_i
+            elif c_i > reaction_extreme + filter_width:
+                state, sub_pivot, filter_width = _SECONDARY_RALLY, c_i, k * a_i
+        elif state == _SECONDARY_RALLY:
+            if c_i > trend_origin:
+                state, trend_origin = _UP_TREND, c_i
+            elif c_i > sub_pivot:
+                sub_pivot = c_i
+            elif c_i < reaction_extreme - filter_width:
+                state, trend_origin, filter_width = _DOWN_TREND, c_i, k * a_i
+        elif state == _DOWN_TREND:
+            if c_i < trend_origin:
+                trend_origin = c_i
+            elif c_i > trend_origin + filter_width:
+                state, reaction_extreme, filter_width = _NATURAL_RALLY, c_i, k * a_i
+        elif state == _NATURAL_RALLY:
+            if c_i > reaction_extreme:
+                reaction_extreme = c_i
+            elif c_i < reaction_extreme - filter_width:
+                state, sub_pivot, filter_width = _SECONDARY_REACTION, c_i, k * a_i
+        else:  # _SECONDARY_REACTION
+            if c_i < trend_origin:
+                state, trend_origin = _DOWN_TREND, c_i
+            elif c_i < sub_pivot:
+                sub_pivot = c_i
+            elif c_i > reaction_extreme + filter_width:
+                state, trend_origin, filter_width = _UP_TREND, c_i, k * a_i
+        phase[i] = state
+        pivot[i] = {_UP_TREND: trend_origin, _DOWN_TREND: trend_origin, _NATURAL_REACTION: reaction_extreme, _NATURAL_RALLY: reaction_extreme, _SECONDARY_RALLY: sub_pivot, _SECONDARY_REACTION: sub_pivot}[state]
+    return pd.Series(phase, index=c.index), pd.Series(pivot, index=c.index)
+
+
+def livermore_phase(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14, k: float = 2.0) -> pd.Series:
+    """리버모어 6국면 코드 시리즈. 1=상승국면 2=자연반락 3=2차반등 -1=하락국면 -2=자연반등 -3=2차반락."""
+    return _livermore_state(high, low, close, n, k)[0]
+
+
+def livermore_pivot(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14, k: float = 2.0) -> pd.Series:
+    """현재 국면의 판단 기준이 되는 피벗 종가 시리즈."""
+    return _livermore_state(high, low, close, n, k)[1]
+
+
+def livermore_phase_segments(phase: pd.Series) -> list[dict[str, Any]]:
+    """국면 코드 시리즈를 같은 값이 이어지는 구간으로 뭉친다 — 차트 배경 띠 하나가 구간 하나다."""
+    segments: list[dict[str, Any]] = []
+    start = None
+    code = None
+    previous_index = None
+    for index, value in phase.items():
+        if pd.isna(value):
+            if code is not None:
+                segments.append({"from": start, "to": previous_index, "phase_code": int(code)})
+                code = None
+            previous_index = index
+            continue
+        if value != code:
+            if code is not None:
+                segments.append({"from": start, "to": previous_index, "phase_code": int(code)})
+            code, start = value, index
+        previous_index = index
+    if code is not None:
+        segments.append({"from": start, "to": previous_index, "phase_code": int(code)})
+    return segments
 
 
 def bollinger_bands(close: pd.Series, n: int = 20, k: float = 2.0) -> dict[str, pd.Series]:

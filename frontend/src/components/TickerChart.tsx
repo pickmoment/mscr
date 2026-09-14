@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode, createChart, type LogicalRange, type MouseEventParams, type Time } from 'lightweight-charts';
 import { BarsResponse, ChartBar, ChartPlotSpec } from '../lib/api';
 import { compactVolume, money } from '../lib/format';
+import { LivermorePhaseBands } from '../lib/livermore';
 import { marketInfo } from '../lib/market';
 import { MeasureBar, MeasureMode, MeasureRange, MeasureSpan, MeasureTool, SpanTool } from '../lib/measure';
 import { alignTick, PositionLevel, PositionPlan, PositionZones } from '../lib/position';
@@ -92,6 +93,8 @@ export default function TickerChart({ data, light, plan, kind, onPlanChange, mea
     chartRef.current = chart;
     Object.entries(data.overlays).forEach(([key, points], index) => { const line = chart.addSeries(LineSeries, { title: key.toUpperCase(), priceScaleId: 'right', color: SERIES[index % SERIES.length], lineWidth: 1 }, 0); line.setData(points); });
     if (data.bb) for (const key of ['upper', 'lower']) { const line = chart.addSeries(LineSeries, { priceScaleId: 'right', color: t.text3, lineWidth: 1, lineStyle: LineStyle.Dashed }, 0); line.setData(data.bb[key] || []); }
+    if (data.livermore_segments?.length) candles.attachPrimitive(new LivermorePhaseBands(data.livermore_segments));
+    if (data.livermore_pivot) { const pivot = chart.addSeries(LineSeries, { priceScaleId: 'right', color: t.warn, lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false }, 0); pivot.setData(data.livermore_pivot); }
     if (data.rsi) {
       const pane = chart.addPane();
       const line = pane.addSeries(LineSeries, { priceScaleId: 'right', color: SERIES[2], lineWidth: 2 });

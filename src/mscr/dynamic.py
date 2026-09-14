@@ -12,12 +12,12 @@ import pandas as pd
 from .db import db_session
 from .market import active as active_market
 from .market import bar_source
-from .indicators import atr, crosses, ema, historical_volatility, obv, obv_ratio, prior_avg_ratio, returns, rsi, slope, sma, vwma
+from .indicators import atr, crosses, ema, historical_volatility, livermore_phase, livermore_pivot, obv, obv_ratio, prior_avg_ratio, returns, rsi, slope, sma, vwma
 
 SERIES_NAMES = {"open", "high", "low", "close", "volume", "value"}
 SCALAR_NAMES = {"market_cap", "shares", "per", "pbr", "eps", "bps", "div", "change_pct", "bars_available", "halted", "price_jump_flag", "weighted_return"}
 SCREEN_NAMES = SERIES_NAMES | SCALAR_NAMES
-BUILTIN_FUNCTIONS = {"sma", "ema", "vwma", "rsi", "returns", "prior_avg_ratio", "obv", "obv_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min", "crosses_above", "crosses_below", "abs"}
+BUILTIN_FUNCTIONS = {"sma", "ema", "vwma", "rsi", "returns", "prior_avg_ratio", "obv", "obv_ratio", "historical_volatility", "atr", "slope", "rolling_max", "rolling_min", "crosses_above", "crosses_below", "abs", "livermore_phase", "livermore_pivot"}
 BUILTIN_CATALOG = [
     {"key": "sma", "label": "단순 이동평균", "signature": "sma(series, period)"},
     {"key": "ema", "label": "지수 이동평균", "signature": "ema(series, period)"},
@@ -35,6 +35,8 @@ BUILTIN_CATALOG = [
     {"key": "crosses_below", "label": "하향 교차", "signature": "crosses_below(fast, slow)"},
     {"key": "rolling_min", "label": "기간 최저값", "signature": "rolling_min(series, period)"},
     {"key": "abs", "label": "절댓값", "signature": "abs(value)"},
+    {"key": "livermore_phase", "label": "리버모어 국면 코드 (1=상승국면 2=자연반락 3=2차반등 -1=하락국면 -2=자연반등 -3=2차반락)", "signature": "livermore_phase(high, low, close, period, k)"},
+    {"key": "livermore_pivot", "label": "리버모어 국면 피벗 종가", "signature": "livermore_pivot(high, low, close, period, k)"},
 ]
 _BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod}
 _UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
@@ -79,6 +81,12 @@ def _period(value: Any, name: str = "period") -> int:
     if isinstance(value, bool) or int(value) != value or int(value) <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return int(value)
+
+
+def _positive_number(value: Any, name: str = "k") -> float:
+    if isinstance(value, bool) or float(value) <= 0:
+        raise ValueError(f"{name} must be a positive number")
+    return float(value)
 
 
 def _bind_parameters(definition: dict[str, Any], args: list[Any]) -> dict[str, float]:
@@ -162,6 +170,8 @@ def _evaluate(node: ast.AST, env: dict[str, Any], custom: dict[str, dict[str, An
             "crosses_above": lambda fast, slow: crosses(fast, slow)[0],
             "crosses_below": lambda fast, slow: crosses(fast, slow)[1],
             "abs": abs,
+            "livermore_phase": lambda high, low, close, period, k: livermore_phase(high, low, close, _period(period), _positive_number(k)),
+            "livermore_pivot": lambda high, low, close, period, k: livermore_pivot(high, low, close, _period(period), _positive_number(k)),
         }
         return functions[name](*args)
     raise ValueError("지원하지 않는 수식입니다")

@@ -8,8 +8,9 @@ export type MarketsResponse = { active: MarketKey; default: MarketKey; markets: 
 export type Instrument = { ticker: string; name: string; kind: string; market: string | null; category: string | null; base_index: string | null; as_of: string | null; quote: Record<string, number | boolean | null>; fundamental: Record<string, number | null>; bars_available: number; position: Position | null; etf: { nav: number | null; premium_pct: number | null; tracking_error: number | null; top_holdings: { name: string; weight: number }[] | null } | null };
 export type InstrumentHit = { ticker: string; name: string; kind: string; market: string | null };
 export type ChartPoint = { time: Time; value: number };
+export type LivermoreSegment = { from: Time; to: Time; phase_code: number };
 export type ChartBar = { time: Time; open: number; high: number; low: number; close: number; volume: number; halted: boolean };
-export type ChartIndicatorParams = { maPeriods: number[]; rsiPeriod: number; macdFast: number; macdSlow: number; macdSignal: number; bbPeriod: number; bbK: number; volumeMaPeriod: number };
+export type ChartIndicatorParams = { maPeriods: number[]; rsiPeriod: number; macdFast: number; macdSlow: number; macdSignal: number; bbPeriod: number; bbK: number; volumeMaPeriod: number; livermorePeriod: number; livermoreK: number };
 export type ChartSource = 'local' | 'alphasquare';
 // 차트에 얹는 수식 지표. 수식은 스크리너와 같은 언어라 내장 함수도 저장해 둔 사용자 지표도 쓸 수 있다.
 export type ChartPlotPane = 'price' | 'volume' | 'sub1' | 'sub2' | 'sub3';
@@ -18,7 +19,7 @@ export type ChartPlotSpec = { id: string; label: string; formula: string; pane: 
 // 서버는 계산 결과만 돌려준다 — 색·판 같은 표시 설정은 클라이언트가 들고 id로 짝을 맞춘다.
 export type ChartPlot = { id: string; error: string | null; points: ChartPoint[] };
 export type ChartFreq = 'minute-1' | 'minute-3' | 'minute-5' | 'minute-15' | 'minute-30' | 'minute-60' | 'day';
-export type BarsResponse = { ticker: string; adjusted: boolean; price_jump_flag: boolean; bars: ChartBar[]; overlays: Record<string, ChartPoint[]>; rsi?: ChartPoint[]; macd?: Record<string, ChartPoint[]>; bb?: Record<string, ChartPoint[]>; volume_ma?: ChartPoint[]; plots?: ChartPlot[]; source: ChartSource; freq: ChartFreq | null };
+export type BarsResponse = { ticker: string; adjusted: boolean; price_jump_flag: boolean; bars: ChartBar[]; overlays: Record<string, ChartPoint[]>; rsi?: ChartPoint[]; macd?: Record<string, ChartPoint[]>; bb?: Record<string, ChartPoint[]>; volume_ma?: ChartPoint[]; livermore_pivot?: ChartPoint[]; livermore_segments?: LivermoreSegment[]; plots?: ChartPlot[]; source: ChartSource; freq: ChartFreq | null };
 export type Position = { ticker: string; name: string; quantity: number; cost: number; avg_cost: number; last_close: number | null; market_value: number; unrealized: number; unrealized_pct: number | null; day_change: number; weight: number; stale: boolean };
 export type PortfolioData = { positions: Position[]; total_market_value: number; total_cost: number; total_unrealized: number; total_unrealized_pct: number | null; total_realized: number; total_day_change: number; cash: number; currency: string; total_assets: number; stale: boolean };
 export type Trade = { id: number; ticker: string; name: string | null; side: 'buy' | 'sell'; trade_date: string; quantity: number; price: number; fee: number; tax: number; memo: string | null };
@@ -151,7 +152,7 @@ const request = async <T>(path: string, init?: RequestInit, options?: RequestOpt
   if (!response.ok) throw new Error(detailMessage((await response.json().catch(() => ({}))).detail, response.status));
   return response.status === 204 ? undefined as T : response.json();
 };
-const barsPath = (ticker: string, range: string, source: ChartSource, freq: ChartFreq, count: number, indicators: string[], config: ChartIndicatorParams, plots: string) => { const query = new URLSearchParams({ range, source, freq, count: String(count), indicators: indicators.join(','), ma_periods: config.maPeriods.join(','), rsi_period: String(config.rsiPeriod), macd_fast: String(config.macdFast), macd_slow: String(config.macdSlow), macd_signal: String(config.macdSignal), bb_period: String(config.bbPeriod), bb_k: String(config.bbK), volume_ma_period: String(config.volumeMaPeriod), plots }); return `/api/instruments/${ticker}/bars?${query}`; };
+const barsPath = (ticker: string, range: string, source: ChartSource, freq: ChartFreq, count: number, indicators: string[], config: ChartIndicatorParams, plots: string) => { const query = new URLSearchParams({ range, source, freq, count: String(count), indicators: indicators.join(','), ma_periods: config.maPeriods.join(','), rsi_period: String(config.rsiPeriod), macd_fast: String(config.macdFast), macd_slow: String(config.macdSlow), macd_signal: String(config.macdSignal), bb_period: String(config.bbPeriod), bb_k: String(config.bbK), volume_ma_period: String(config.volumeMaPeriod), livermore_period: String(config.livermorePeriod), livermore_k: String(config.livermoreK), plots }); return `/api/instruments/${ticker}/bars?${query}`; };
 
 export const api = {
   meta: () => request<Meta>('/api/meta'),
